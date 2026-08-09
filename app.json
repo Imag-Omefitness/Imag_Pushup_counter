@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "pushup-counter",
+    "slug": "pushup-counter",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "autolinking": {
+      "exclude": [
+        "expo-status-bar"
+      ]
+    },
+    "ios": {
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Usamos a câmera para detectar sua pose e contar flexões."
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Usamos a câmera para detectar sua pose e contar flexões."
+        }
+      ]
+    ]
+  }
+}
