@@ -9,8 +9,10 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import HomeScreen from './screens/HomeScreen';
 import PushupWorkoutScreen from './screens/PushupWorkoutScreen';
 import SitupWorkoutScreen from './screens/SitupWorkoutScreen';
+import SquatWorkoutScreen from './screens/SquatWorkoutScreen';
 import RankingScreen from './screens/RankingScreen';
 import { RootStackParamList } from './navigation/types';
+import { ProfileProvider } from './context/ProfileContext';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -24,16 +26,17 @@ const AppTheme = {
 
 export default function App() {
   return (
-    <>
+    <ProfileProvider>
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0f" />
       <NavigationContainer theme={AppTheme}>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="Home" component={HomeScreen} />
           <Stack.Screen name="Pushup" component={PushupWorkoutScreen} />
           <Stack.Screen name="Situp" component={SitupWorkoutScreen} />
+          <Stack.Screen name="Squat" component={SquatWorkoutScreen} />
           <Stack.Screen name="Ranking" component={RankingScreen} />
         </Stack.Navigator>
       </NavigationContainer>
-    </>
+    </ProfileProvider>
   );
 }
