@@ -8,12 +8,14 @@ import { Camera } from 'expo-camera';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { useProfile } from '../context/ProfileContext';
 
 export type Stage = 'up' | 'down' | 'unknown';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Pushup'>;
 
 export default function PushupWorkoutScreen({ navigation }: Props) {
+  const { addXp } = useProfile();
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [count, setCount] = useState(0);
   const [stage, setStage] = useState<Stage>('unknown');
@@ -145,7 +147,8 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
   const handleFinishAndNavigate = () => {
     setShowSummaryModal(false);
-    navigation.navigate('Home', { gainedXp: count });
+    addXp(count);
+    navigation.navigate('Home');
   };
 
   const calories = (count * 0.35).toFixed(1);
