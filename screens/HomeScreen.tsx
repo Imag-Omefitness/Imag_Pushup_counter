@@ -15,6 +15,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { useProfile } from '../context/ProfileContext';
 
 export type ExerciseId = 'pushup' | 'situp' | 'squat';
 
@@ -217,47 +218,11 @@ function ExerciseCard({
   );
 }
 
-export default function HomeScreen({ navigation, route }: Props) {
-  const [profile, setProfile] = useState({
-    username: 'Atleta',
-    coins: 100,
-    level: 1,
-    xpCurrent: 120,
-    xpToNextLevel: 500,
-    trophies: 0,
-    rankName: 'MADEIRA' as RankTierKey,
-  });
+export default function HomeScreen({ navigation }: Props) {
+  const { profile } = useProfile();
 
   const [selectedId, setSelectedId] = useState<ExerciseId | null>(null);
   const navigateTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  React.useEffect(() => {
-    if (route.params?.gainedXp) {
-      const gained = route.params.gainedXp;
-      setProfile((prev) => {
-        const round1 = (n: number) => Math.round(n * 10) / 10;
-
-        let newXp = round1(prev.xpCurrent + gained);
-        let newLevel = prev.level;
-        let nextLevelXp = prev.xpToNextLevel;
-
-        while (newXp >= nextLevelXp) {
-          newLevel += 1;
-          newXp = round1(newXp - nextLevelXp);
-          nextLevelXp = Math.floor(nextLevelXp * 1.5);
-        }
-
-        return {
-          ...prev,
-          xpCurrent: newXp,
-          level: newLevel,
-          xpToNextLevel: nextLevelXp,
-        };
-      });
-
-      navigation.setParams({ gainedXp: undefined });
-    }
-  }, [route.params?.gainedXp]);
 
   useFocusEffect(
     useCallback(() => {
@@ -304,7 +269,7 @@ export default function HomeScreen({ navigation, route }: Props) {
     navigation.navigate('Ranking');
   };
 
-  // Detector do gesto de Swipe (deslize) para a esquerda — usa o
+  // Detector do gesto de Swipe (deslize) para a direita — usa o
   // PanResponder nativo do React Native, sem depender de
   // react-native-gesture-handler (que não está instalado no projeto e
   // causava o erro "Unable to resolve module react-native-gesture-handler").
@@ -313,7 +278,7 @@ export default function HomeScreen({ navigation, route }: Props) {
       onMoveShouldSetPanResponder: (_evt, gestureState) =>
         Math.abs(gestureState.dx) > 20 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5,
       onPanResponderRelease: (_evt, gestureState) => {
-        if (gestureState.dx < -50) {
+        if (gestureState.dx > 50) {
           goToRanking();
         }
       },
@@ -323,115 +288,115 @@ export default function HomeScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={styles.container} {...panResponder.panHandlers}>
       {/* Barra superior */}
-      <View style={styles.topBar}>
-        <View style={styles.coinBadge}>
-          <MaterialCommunityIcons name="cash-multiple" size={16} color="#ffd60a" />
-          <Text style={styles.coinText}>{profile.coins}</Text>
+        <View style={styles.topBar}>
+          <View style={styles.coinBadge}>
+            <MaterialCommunityIcons name="cash-multiple" size={16} color="#ffd60a" />
+            <Text style={styles.coinText}>{profile.coins}</Text>
+          </View>
+          <Pressable onPress={handleSettingsPress} style={styles.settingsButton}>
+            <MaterialCommunityIcons name="cog" size={22} color="#8a8a92" />
+          </Pressable>
         </View>
-        <Pressable onPress={handleSettingsPress} style={styles.settingsButton}>
-          <MaterialCommunityIcons name="cog" size={22} color="#8a8a92" />
-        </Pressable>
-      </View>
 
-      {/* Card do perfil */}
-      <View style={styles.profileCard}>
-        <View style={styles.profileInfo}>
-          <View style={styles.userRow}>
-            <Text style={styles.usernameText}>{profile.username}</Text>
+        {/* Card do perfil */}
+        <View style={styles.profileCard}>
+          <View style={styles.profileInfo}>
+            <View style={styles.userRow}>
+              <Text style={styles.usernameText}>{profile.username}</Text>
 
-            <RankBadge tier={profile.rankName} />
+              <RankBadge tier={profile.rankName as RankTierKey} />
 
-            <View style={styles.trophyBadge}>
-              <MaterialCommunityIcons name="trophy" size={14} color="#ffd60a" />
-              <Text style={styles.trophyText}>{profile.trophies}</Text>
+              <View style={styles.trophyBadge}>
+                <MaterialCommunityIcons name="trophy" size={14} color="#ffd60a" />
+                <Text style={styles.trophyText}>{profile.trophies}</Text>
+              </View>
             </View>
+
+            <View style={styles.xpRow}>
+              <View style={styles.lvBadge}>
+                <Text style={styles.lvBadgeText}>LV {profile.level}</Text>
+              </View>
+              <View style={styles.xpTrack}>
+                <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
+              </View>
+            </View>
+            <Text style={styles.xpValueText}>
+              {profile.xpCurrent.toFixed(1)} / {profile.xpToNextLevel} XP
+            </Text>
           </View>
 
-          <View style={styles.xpRow}>
-            <View style={styles.lvBadge}>
-              <Text style={styles.lvBadgeText}>LV {profile.level}</Text>
-            </View>
-            <View style={styles.xpTrack}>
-              <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
-            </View>
+          <View style={styles.avatarCircle}>
+            <MaterialCommunityIcons name="account" size={34} color="#8a8a92" />
           </View>
-          <Text style={styles.xpValueText}>
-            {profile.xpCurrent.toFixed(1)} / {profile.xpToNextLevel} XP
+        </View>
+
+        {/* Cabeçalho */}
+        <View style={styles.header}>
+          <MaterialCommunityIcons name="sword-cross" size={26} color="#ff3b30" />
+          <Text style={styles.headerTitle}>CALISTENIA</Text>
+        </View>
+        <Text style={styles.headerSubtitle}>Escolha seu exercício</Text>
+
+        {/* Progresso de Exercícios */}
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionLabel}>— EXERCÍCIOS —</Text>
+          <Text style={styles.sectionCount}>
+            {availableCount}/{EXERCISES.length}
           </Text>
         </View>
-
-        <View style={styles.avatarCircle}>
-          <MaterialCommunityIcons name="account" size={34} color="#8a8a92" />
-        </View>
-      </View>
-
-      {/* Cabeçalho */}
-      <View style={styles.header}>
-        <MaterialCommunityIcons name="sword-cross" size={26} color="#ff3b30" />
-        <Text style={styles.headerTitle}>CALISTENIA</Text>
-      </View>
-      <Text style={styles.headerSubtitle}>Escolha seu exercício</Text>
-
-      {/* Progresso de Exercícios */}
-      <View style={styles.sectionRow}>
-        <Text style={styles.sectionLabel}>— EXERCÍCIOS —</Text>
-        <Text style={styles.sectionCount}>
-          {availableCount}/{EXERCISES.length}
-        </Text>
-      </View>
-      <View style={styles.progressTrack}>
-        <View
-          style={[
-            styles.progressFill,
-            { width: `${(availableCount / EXERCISES.length) * 100}%` },
-          ]}
-        />
-      </View>
-
-      {/* Grid de Exercícios */}
-      <View style={styles.grid}>
-        {EXERCISES.map((exercise) => (
-          <ExerciseCard
-            key={exercise.id}
-            exercise={exercise}
-            isActive={selectedId === exercise.id}
-            onPress={handlePress}
+        <View style={styles.progressTrack}>
+          <View
+            style={[
+              styles.progressFill,
+              { width: `${(availableCount / EXERCISES.length) * 100}%` },
+            ]}
           />
-        ))}
-      </View>
+        </View>
 
-      <View style={{ flex: 1 }} />
-
-      {/* Navegação Inferior */}
-      <View style={styles.bottomNav}>
-        {/* BOTÃO RANKS (INFERIOR ESQUERDO) */}
-        <Pressable style={styles.navItem} onPress={goToRanking}>
-          <MaterialCommunityIcons name="podium" size={24} color="#6b6b73" />
-          <Text style={styles.navLabel}>RANKS</Text>
-        </Pressable>
-
-        <Pressable style={styles.navItemCenter}>
-          <View style={styles.navCenterCircle}>
-            <MaterialCommunityIcons
-              name="sword-cross"
-              size={26}
-              color="#0a0a0f"
+        {/* Grid de Exercícios */}
+        <View style={styles.grid}>
+          {EXERCISES.map((exercise) => (
+            <ExerciseCard
+              key={exercise.id}
+              exercise={exercise}
+              isActive={selectedId === exercise.id}
+              onPress={handlePress}
             />
-          </View>
-          <Text style={[styles.navLabel, styles.navLabelActive]}>
-            INÍCIO
-          </Text>
-        </Pressable>
+          ))}
+        </View>
 
-        <Pressable style={styles.navItem}>
-          <MaterialCommunityIcons
-            name="account"
-            size={24}
-            color="#6b6b73"
-          />
-          <Text style={styles.navLabel}>PERFIL</Text>
-        </Pressable>
-      </View>
+        <View style={{ flex: 1 }} />
+
+        {/* Navegação Inferior */}
+        <View style={styles.bottomNav}>
+          {/* BOTÃO RANKS (INFERIOR ESQUERDO) */}
+          <Pressable style={styles.navItem} onPress={goToRanking}>
+            <MaterialCommunityIcons name="podium" size={24} color="#6b6b73" />
+            <Text style={styles.navLabel}>RANKS</Text>
+          </Pressable>
+
+          <Pressable style={styles.navItemCenter}>
+            <View style={styles.navCenterCircle}>
+              <MaterialCommunityIcons
+                name="sword-cross"
+                size={26}
+                color="#0a0a0f"
+              />
+            </View>
+            <Text style={[styles.navLabel, styles.navLabelActive]}>
+              INÍCIO
+            </Text>
+          </Pressable>
+
+          <Pressable style={styles.navItem}>
+            <MaterialCommunityIcons
+              name="account"
+              size={24}
+              color="#6b6b73"
+            />
+            <Text style={styles.navLabel}>PERFIL</Text>
+          </Pressable>
+        </View>
     </SafeAreaView>
   );
 }
