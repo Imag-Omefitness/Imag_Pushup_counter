@@ -48,7 +48,7 @@ const EXERCISES: Exercise[] = [
     title: 'AGACHAMENTO',
     subtitle: 'Pernas e glúteos',
     icon: 'weight-lifter',
-    available: false,
+    available: true,
   },
 ];
 
@@ -235,13 +235,15 @@ export default function HomeScreen({ navigation, route }: Props) {
     if (route.params?.gainedXp) {
       const gained = route.params.gainedXp;
       setProfile((prev) => {
-        let newXp = prev.xpCurrent + gained;
+        const round1 = (n: number) => Math.round(n * 10) / 10;
+
+        let newXp = round1(prev.xpCurrent + gained);
         let newLevel = prev.level;
         let nextLevelXp = prev.xpToNextLevel;
 
         while (newXp >= nextLevelXp) {
           newLevel += 1;
-          newXp -= nextLevelXp;
+          newXp = round1(newXp - nextLevelXp);
           nextLevelXp = Math.floor(nextLevelXp * 1.5);
         }
 
@@ -288,6 +290,8 @@ export default function HomeScreen({ navigation, route }: Props) {
         navigation.navigate('Pushup');
       } else if (exercise.id === 'situp') {
         navigation.navigate('Situp');
+      } else if (exercise.id === 'squat') {
+        navigation.navigate('Squat');
       }
     }, 220);
   };
@@ -352,7 +356,7 @@ export default function HomeScreen({ navigation, route }: Props) {
             </View>
           </View>
           <Text style={styles.xpValueText}>
-            {profile.xpCurrent} / {profile.xpToNextLevel} XP
+            {profile.xpCurrent.toFixed(1)} / {profile.xpToNextLevel} XP
           </Text>
         </View>
 
