@@ -21,6 +21,8 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
   const [countdown, setCountdown] = useState<number | string | null>(null);
   const [isWorkoutActive, setIsWorkoutActive] = useState(false);
 
+  const webViewRef = useRef<WebView>(null);
+
   // Controle de Tempo Decorrido (em segundos)
   const [durationSeconds, setDurationSeconds] = useState(0);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -59,6 +61,32 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
     };
   }, [isWorkoutActive, isPlankLost]);
 
+  // Para o stream de câmera de dentro da WebView explicitamente. Sem isso,
+  // o <video>/getUserMedia continua ativo em segundo plano enquanto o modal
+  // de resumo fica aberto (às vezes por bastante tempo), e o Android não
+  // libera o hardware da câmera a tempo — daí a tela preta ao abrir o
+  // próximo treino. Chamamos isso assim que o treino termina, não só
+  // quando o usuário sai da tela.
+  const stopCamera = () => {
+    webViewRef.current?.injectJavaScript(`
+      (function() {
+        try {
+          if (window.__stopCamera) { window.__stopCamera(); }
+        } catch (e) {}
+      })();
+      true;
+    `);
+  };
+
+  // Garantia extra: se o componente desmontar por qualquer outro caminho
+  // (ex: botão de voltar do Android), tenta parar a câmera mesmo assim.
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+
   const handleMessage = (event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
@@ -90,6 +118,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
         setExitCountdown(null);
       } else if (data.type === 'WORKOUT_FINISHED') {
         // Quando o timer zera ("STOP"), encerra o treino e abre o modal de resumo
+        stopCamera();
         setIsPlankLost(false);
         setIsWorkoutActive(false);
         setShowSummaryModal(true);
@@ -106,6 +135,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
         text: 'Sair',
         style: 'destructive',
         onPress: () => {
+          stopCamera();
           setIsWorkoutActive(false);
           setShowSummaryModal(true);
         },
@@ -265,6 +295,28 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           sendToRN('PLANK_RESTORED', {});
         }
 
+        // Exposto para o lado React Native chamar via injectJavaScript assim
+        // que o treino terminar. Para o loop do MediaPipe Camera E solta
+        // explicitamente as tracks do getUserMedia — sem isso, o Android
+        // pode continuar segurando o hardware da câmera depois que esta
+        // WebView é desmontada, deixando a câmera preta na próxima tela.
+        window.__stopCamera = function() {
+          try {
+            if (typeof camera !== 'undefined' && camera && typeof camera.stop === 'function') {
+              camera.stop();
+            }
+          } catch (e) {}
+          try {
+            const stream = videoElement.srcObject;
+            if (stream && typeof stream.getTracks === 'function') {
+              stream.getTracks().forEach(function (track) {
+                track.stop();
+              });
+            }
+            videoElement.srcObject = null;
+          } catch (e) {}
+        };
+
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           const pose = new Pose({
             locateFile: (file) => \`https://cdn.jsdelivr.net/npm/@mediapipe/pose/\${file}\`
@@ -367,19 +419,19 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
             if (isCountingDown) return;
 
-            if (isWorkoutActive && shoulder && wrist && hip && !isExiting) {
-              const torsoLength = Math.hypot(shoulder.x - hip.x, shoulder.y - hip.y) || 1;
-              const horizontalDist = Math.abs(shoulder.x - wrist.x);
-              const xRatio = horizontalDist / torsoLength;
+            if (isWorkoutActive && shoulder && elbow && wrist && hip && !isExiting) {
+              const elbowAngle = calculateAngle(shoulder, elbow, wrist);
 
               let stateChanged = false;
 
-              if (xRatio < 0.25 && stage !== 'down') {
+              // Desceu: cotovelo dobrado (~90° ou menos)
+              if (elbowAngle < 100 && stage !== 'down') {
                 stage = 'down';
                 stateChanged = true;
               }
 
-              if (xRatio > 0.40 && stage === 'down' && isValidBodyLine) {
+              // Subiu: braço quase totalmente estendido de novo
+              if (elbowAngle > 155 && stage === 'down' && isValidBodyLine) {
                 stage = 'up';
                 count++;
                 stateChanged = true;
@@ -423,6 +475,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container}>
       {hasPermission && (
         <WebView
+          ref={webViewRef}
           originWhitelist={['*']}
           source={{
             html: htmlContent,
