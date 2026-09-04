@@ -16,8 +16,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useProfile } from '../context/ProfileContext';
-
-export type ExerciseId = 'pushup' | 'situp' | 'squat';
+import CoinIcon from '../assets/icons/Omecoin.svg';
+export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -26,29 +26,46 @@ type Exercise = {
   title: string;
   subtitle: string;
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  muscle: 'Chest' | 'Legs' | 'Backs' | 'Abs';
+  muscleColor: string;
   available: boolean;
 };
 
 const EXERCISES: Exercise[] = [
   {
     id: 'pushup',
-    title: 'FLEXÃO',
-    subtitle: 'Peito, ombros e tríceps',
+    title: 'PUSH-UPS',
+    subtitle: 'Peito',
     icon: 'arm-flex',
+    muscle: 'Chest',
+    muscleColor: '#2f80ff',
     available: true,
   },
   {
     id: 'situp',
-    title: 'ABDOMINAL',
-    subtitle: 'Core e estabilidade',
-    icon: 'yoga',
+    title: 'SIT-UPS',
+    subtitle: 'Abdômen',
+    icon: 'human',
+    muscle: 'Abs',
+    muscleColor: '#20b95a',
     available: true,
   },
   {
     id: 'squat',
-    title: 'AGACHAMENTO',
-    subtitle: 'Pernas e glúteos',
+    title: 'SQUATS',
+    subtitle: 'Pernas',
     icon: 'weight-lifter',
+    muscle: 'Legs',
+    muscleColor: '#f4c430',
+    available: true,
+  },
+  {
+    id: 'pullup',
+    title: 'PULL-UPS',
+    subtitle: 'Costas',
+    icon: 'human-handsup',
+    muscle: 'Backs',
+    muscleColor: '#f05a3c',
     available: true,
   },
 ];
@@ -110,48 +127,41 @@ function ExerciseCard({
 }) {
   const pressScale = useRef(new Animated.Value(1)).current;
   const pressDepth = useRef(new Animated.Value(0)).current;
-  const checkScale = useRef(new Animated.Value(0)).current;
-
-  React.useEffect(() => {
-    Animated.spring(checkScale, {
-      toValue: isActive ? 1 : 0,
-      useNativeDriver: true,
-      friction: 5,
-      tension: 140,
-    }).start();
-  }, [isActive]);
 
   const handlePressIn = () => {
-    if (!exercise.available) return;
     Animated.spring(pressScale, {
-      toValue: 0.94,
+      toValue: 0.96,
       useNativeDriver: true,
       speed: 40,
       bounciness: 2,
     }).start();
+
     Animated.timing(pressDepth, {
       toValue: 1,
-      duration: 90,
+      duration: 80,
       useNativeDriver: false,
     }).start();
   };
 
   const handlePressOut = () => {
-    if (!exercise.available) return;
     Animated.spring(pressScale, {
       toValue: 1,
       useNativeDriver: true,
       friction: 4,
       tension: 90,
     }).start();
+
     Animated.timing(pressDepth, {
       toValue: 0,
-      duration: 160,
+      duration: 140,
       useNativeDriver: false,
     }).start();
   };
 
-  const translateY = pressDepth.interpolate({ inputRange: [0, 1], outputRange: [0, 3] });
+  const translateY = pressDepth.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 2],
+  });
 
   return (
     <Pressable
@@ -165,52 +175,34 @@ function ExerciseCard({
           <View
             style={[
               styles.card,
-              exercise.available && isActive && styles.cardAvailable,
-              !exercise.available && styles.cardLocked,
+              isActive && styles.cardActive,
             ]}
           >
-            {exercise.available && <View style={styles.cardDot} />}
-
-            {exercise.available && (
-              <Animated.View
-                style={[
-                  styles.checkBadge,
-                  { transform: [{ scale: checkScale }], opacity: checkScale },
-                ]}
-              >
-                <MaterialCommunityIcons name="check-bold" size={12} color="#0a0a0f" />
-              </Animated.View>
-            )}
-
             <View
               style={[
-                styles.iconCircle,
-                exercise.available && isActive && styles.iconCircleActive,
+                styles.cardDot,
+                { backgroundColor: exercise.muscleColor },
               ]}
-            >
+            />
+
+            <View style={styles.iconCircle}>
               <MaterialCommunityIcons
                 name={exercise.icon}
-                size={28}
-                color={exercise.available && isActive ? '#ff3b30' : exercise.available ? '#8a8a92' : '#6b6b73'}
+                size={30}
+                color={isActive ? '#ff3b30' : '#d6d6dc'}
               />
             </View>
 
             <Text
               style={[
                 styles.cardTitle,
-                !exercise.available && styles.cardTitleLocked,
+                isActive && styles.cardTitleActive,
               ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
             >
               {exercise.title}
             </Text>
-            <Text style={styles.cardSubtitle}>{exercise.subtitle}</Text>
-
-            {!exercise.available && (
-              <View style={styles.lockBadge}>
-                <MaterialCommunityIcons name="lock" size={12} color="#6b6b73" />
-                <Text style={styles.lockText}>EM BREVE</Text>
-              </View>
-            )}
           </View>
         </Animated.View>
       </Animated.View>
@@ -233,21 +225,12 @@ export default function HomeScreen({ navigation }: Props) {
     }, [])
   );
 
-  const availableCount = EXERCISES.filter((e) => e.available).length;
   const xpPercent = Math.min(
     100,
     (profile.xpCurrent / profile.xpToNextLevel) * 100
   );
 
   const handlePress = (exercise: Exercise) => {
-    if (!exercise.available) {
-      Alert.alert(
-        'Em breve',
-        `O modo ${exercise.title.toLowerCase()} ainda está em desenvolvimento.`
-      );
-      return;
-    }
-
     setSelectedId(exercise.id);
 
     navigateTimeout.current = setTimeout(() => {
@@ -257,6 +240,11 @@ export default function HomeScreen({ navigation }: Props) {
         navigation.navigate('Situp');
       } else if (exercise.id === 'squat') {
         navigation.navigate('Squat');
+      } else if (exercise.id === 'pullup') {
+        Alert.alert(
+          'Em breve',
+          'O modo pull-ups ainda está em desenvolvimento.'
+        );
       }
     }, 220);
   };
@@ -288,115 +276,138 @@ export default function HomeScreen({ navigation }: Props) {
   return (
     <SafeAreaView style={styles.container} {...panResponder.panHandlers}>
       {/* Barra superior */}
-        <View style={styles.topBar}>
-          <View style={styles.coinBadge}>
-            <MaterialCommunityIcons name="cash-multiple" size={16} color="#ffd60a" />
-            <Text style={styles.coinText}>{profile.coins}</Text>
-          </View>
-          <Pressable onPress={handleSettingsPress} style={styles.settingsButton}>
-            <MaterialCommunityIcons name="cog" size={22} color="#8a8a92" />
-          </Pressable>
+      <View style={styles.topBar}>
+        <View style={styles.coinBadge}>
+          <CoinIcon width={30} height={30} />
+          <Text style={styles.coinText}>{profile.coins}</Text>
         </View>
 
-        {/* Card do perfil */}
-        <View style={styles.profileCard}>
-          <View style={styles.profileInfo}>
-            <View style={styles.userRow}>
-              <Text style={styles.usernameText}>{profile.username}</Text>
+        <Pressable onPress={handleSettingsPress} style={styles.settingsButton}>
+          <MaterialCommunityIcons name="cog" size={30} color="#b5b5bd" />
+        </Pressable>
+      </View>
 
-              <RankBadge tier={profile.rankName as RankTierKey} />
+      {/* Card do perfil */}
+      <View style={styles.profileCard}>
+        <View style={styles.profileInfo}>
+          <View style={styles.userRow}>
+            <Text style={styles.usernameText}>{profile.username}</Text>
 
-              <View style={styles.trophyBadge}>
-                <MaterialCommunityIcons name="trophy" size={14} color="#ffd60a" />
-                <Text style={styles.trophyText}>{profile.trophies}</Text>
-              </View>
+            <RankBadge tier={profile.rankName as RankTierKey} />
+
+            <View style={styles.trophyBadge}>
+              <MaterialCommunityIcons name="trophy" size={14} color="#ffd60a" />
+              <Text style={styles.trophyText}>{profile.trophies}</Text>
             </View>
+          </View>
 
-            <View style={styles.xpRow}>
-              <View style={styles.lvBadge}>
-                <Text style={styles.lvBadgeText}>LV {profile.level}</Text>
-              </View>
-              <View style={styles.xpTrack}>
-                <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
-              </View>
+          <View style={styles.xpRow}>
+            <View style={styles.lvBadge}>
+              <Text style={styles.lvBadgeText}>LV {profile.level}</Text>
             </View>
-            <Text style={styles.xpValueText}>
-              {profile.xpCurrent.toFixed(1)} / {profile.xpToNextLevel} XP
-            </Text>
+            <View style={styles.xpTrack}>
+              <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
+            </View>
           </View>
-
-          <View style={styles.avatarCircle}>
-            <MaterialCommunityIcons name="account" size={34} color="#8a8a92" />
-          </View>
-        </View>
-
-        {/* Cabeçalho */}
-        <View style={styles.header}>
-          <MaterialCommunityIcons name="sword-cross" size={26} color="#ff3b30" />
-          <Text style={styles.headerTitle}>CALISTENIA</Text>
-        </View>
-        <Text style={styles.headerSubtitle}>Escolha seu exercício</Text>
-
-        {/* Progresso de Exercícios */}
-        <View style={styles.sectionRow}>
-          <Text style={styles.sectionLabel}>— EXERCÍCIOS —</Text>
-          <Text style={styles.sectionCount}>
-            {availableCount}/{EXERCISES.length}
+          <Text style={styles.xpValueText}>
+            {profile.xpCurrent.toFixed(1)} / {profile.xpToNextLevel} XP
           </Text>
         </View>
-        <View style={styles.progressTrack}>
-          <View
-            style={[
-              styles.progressFill,
-              { width: `${(availableCount / EXERCISES.length) * 100}%` },
-            ]}
+
+        <View style={styles.avatarCircle}>
+          <MaterialCommunityIcons name="account" size={34} color="#8a8a92" />
+          <View style={styles.avatarRedCorner} />
+        </View>
+      </View>
+
+      {/* Cabeçalho */}
+      <View style={styles.header}>
+        <MaterialCommunityIcons name="sword-cross" size={26} color="#ff3b30" />
+        <Text style={styles.headerTitle}>CALISTENIA</Text>
+      </View>
+      <Text style={styles.headerSubtitle}>Escolha seu exercício</Text>
+
+      {/* Progresso de Exercícios */}
+      <View style={styles.sectionRow}>
+        <Text style={styles.sectionLabel}>— EXERCÍCIOS —</Text>
+        <Text style={styles.sectionCount}>4/4</Text>
+      </View>
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, { width: '100%' }]} />
+      </View>
+
+      {/* Filtros visuais por grupo muscular */}
+      <View style={styles.filterRow}>
+        <View style={styles.muscleLegend}>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: '#2f80ff' }]} />
+            <Text style={styles.legendText}>Chest</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: '#f4c430' }]} />
+            <Text style={styles.legendText}>Legs</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: '#f05a3c' }]} />
+            <Text style={styles.legendText}>Backs</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: '#20b95a' }]} />
+            <Text style={styles.legendText}>Abs</Text>
+          </View>
+        </View>
+
+        <Pressable style={styles.sortButton} onPress={() => { }}>
+          <View style={styles.sortLineLong} />
+          <View style={styles.sortLineMedium} />
+          <View style={styles.sortLineShort} />
+        </Pressable>
+      </View>
+
+      {/* Grid de Exercícios */}
+      <View style={styles.grid}>
+        {EXERCISES.map((exercise) => (
+          <ExerciseCard
+            key={exercise.id}
+            exercise={exercise}
+            isActive={selectedId === exercise.id}
+            onPress={handlePress}
           />
-        </View>
+        ))}
+      </View>
 
-        {/* Grid de Exercícios */}
-        <View style={styles.grid}>
-          {EXERCISES.map((exercise) => (
-            <ExerciseCard
-              key={exercise.id}
-              exercise={exercise}
-              isActive={selectedId === exercise.id}
-              onPress={handlePress}
-            />
-          ))}
-        </View>
+      <View style={{ flex: 1 }} />
 
-        <View style={{ flex: 1 }} />
+      {/* Navegação Inferior */}
+      <View style={styles.bottomNav}>
+        {/* BOTÃO RANKS (INFERIOR ESQUERDO) */}
+        <Pressable style={styles.navItem} onPress={goToRanking}>
+          <MaterialCommunityIcons name="podium" size={24} color="#6b6b73" />
+          <Text style={styles.navLabel}>RANKS</Text>
+        </Pressable>
 
-        {/* Navegação Inferior */}
-        <View style={styles.bottomNav}>
-          {/* BOTÃO RANKS (INFERIOR ESQUERDO) */}
-          <Pressable style={styles.navItem} onPress={goToRanking}>
-            <MaterialCommunityIcons name="podium" size={24} color="#6b6b73" />
-            <Text style={styles.navLabel}>RANKS</Text>
-          </Pressable>
-
-          <Pressable style={styles.navItemCenter}>
-            <View style={styles.navCenterCircle}>
-              <MaterialCommunityIcons
-                name="sword-cross"
-                size={26}
-                color="#0a0a0f"
-              />
-            </View>
-            <Text style={[styles.navLabel, styles.navLabelActive]}>
-              INÍCIO
-            </Text>
-          </Pressable>
-
-          <Pressable style={styles.navItem}>
+        <Pressable style={styles.navItemCenter}>
+          <View style={styles.navCenterCircle}>
             <MaterialCommunityIcons
-              name="account"
-              size={24}
-              color="#6b6b73"
+              name="sword-cross"
+              size={26}
+              color="#0a0a0f"
             />
-            <Text style={styles.navLabel}>PERFIL</Text>
-          </Pressable>
-        </View>
+          </View>
+          <Text style={[styles.navLabel, styles.navLabelActive]}>
+            INÍCIO
+          </Text>
+        </Pressable>
+
+        <Pressable style={styles.navItem}>
+          <MaterialCommunityIcons
+            name="account"
+            size={24}
+            color="#6b6b73"
+          />
+          <Text style={styles.navLabel}>PERFIL</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
@@ -416,26 +427,52 @@ const styles = StyleSheet.create({
   coinBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#131318',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    gap: 4,
+  },
+  coinStack: {
+    width: 32,
+    height: 23,
+    position: 'relative',
+  },
+  coin: {
+    position: 'absolute',
+    width: 21,
+    height: 8,
+    borderRadius: 7,
+    backgroundColor: '#ffd60a',
     borderWidth: 1,
-    borderColor: '#1e1e26',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-    gap: 5,
+    borderColor: '#b99800',
+  },
+  coinBack: {
+    left: 0,
+    top: 9,
+    transform: [{ rotate: '-10deg' }],
+    opacity: 0.8,
+  },
+  coinMiddle: {
+    left: 5,
+    top: 6,
+    transform: [{ rotate: '4deg' }],
+    opacity: 0.9,
+  },
+  coinFront: {
+    left: 10,
+    top: 3,
+    transform: [{ rotate: '10deg' }],
   },
   coinText: {
     color: '#ffd60a',
-    fontSize: 13,
-    fontWeight: '800',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: '400',
+    letterSpacing: 0.8,
   },
   settingsButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#131318',
-    borderWidth: 1,
-    borderColor: '#1e1e26',
+    width: 40,
+    height: 40,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -569,8 +606,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#1e1e26',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#ff3b30',
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  avatarRedCorner: {
+    position: 'absolute',
+    left: -1,
+    bottom: -1,
+    width: 29,
+    height: 29,
+    borderWidth: 3,
+    borderTopColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderLeftColor: '#ff3b30',
+    borderBottomColor: '#ff3b30',
+    borderRadius: 16,
   },
   xpRow: {
     flexDirection: 'row',
@@ -629,7 +679,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 28,
+    marginTop: 24,
   },
   sectionLabel: {
     color: '#ff3b30',
@@ -654,31 +704,86 @@ const styles = StyleSheet.create({
     backgroundColor: '#ff3b30',
     borderRadius: 2,
   },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+    minHeight: 28,
+  },
+  muscleLegend: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 11,
+    flex: 1,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    color: '#8a8a92',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  sortButton: {
+    width: 42,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 6,
+  },
+  sortLineLong: {
+    width: 28,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#b9b9c0',
+    marginBottom: 3,
+  },
+  sortLineMedium: {
+    width: 20,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#b9b9c0',
+    marginBottom: 3,
+  },
+  sortLineShort: {
+    width: 12,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#b9b9c0',
+  },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginTop: 18,
-    gap: 14,
+    marginTop: 12,
+    rowGap: 12,
   },
   cardSlot: {
-    width: '47%',
+    width: '31.5%',
   },
   card: {
     width: '100%',
-    backgroundColor: '#131318',
+    aspectRatio: 1,
+    backgroundColor: '#15151f',
     borderRadius: 16,
-    padding: 16,
+    padding: 10,
     borderWidth: 1.5,
-    borderColor: '#1e1e26',
-    minHeight: 140,
+    borderColor: '#171722',
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
   },
-  cardAvailable: {
+  cardActive: {
     borderColor: '#ff3b30',
-    backgroundColor: '#1a1013',
-  },
-  cardLocked: {
-    opacity: 0.65,
+    backgroundColor: '#18151c',
   },
   cardDot: {
     position: 'absolute',
@@ -687,56 +792,29 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#ff3b30',
-  },
-  checkBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#00ff88',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   iconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#1e1e26',
+    position: 'absolute',
+    top: 13,
+    left: '50%',
+    marginLeft: -25,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#20202d',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
-  },
-  iconCircleActive: {
-    backgroundColor: 'rgba(255, 59, 48, 0.15)',
   },
   cardTitle: {
-    color: '#fff',
-    fontSize: 14,
+    color: '#f4f4f6',
+    fontSize: 12,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.2,
+    textAlign: 'center',
+    marginBottom: 3,
   },
-  cardTitleLocked: {
-    color: '#8a8a92',
-  },
-  cardSubtitle: {
-    color: '#6b6b73',
-    fontSize: 11,
-    marginTop: 4,
-  },
-  lockBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 10,
-  },
-  lockText: {
-    color: '#6b6b73',
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.5,
+  cardTitleActive: {
+    color: '#ff6b61',
   },
   bottomNav: {
     flexDirection: 'row',
