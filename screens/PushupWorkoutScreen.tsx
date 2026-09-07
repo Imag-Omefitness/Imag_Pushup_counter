@@ -5,10 +5,12 @@ import React, { useEffect, useState, useRef } from 'react';
 import { StyleSheet, Text, View, SafeAreaView, Pressable, Alert, Modal } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Camera } from 'expo-camera';
+import { Accelerometer } from 'expo-sensors';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useProfile } from '../context/ProfileContext';
+import { RADIUS, SPACING } from '../constants/theme';
 
 export type Stage = 'up' | 'down' | 'unknown';
 
@@ -35,6 +37,48 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
   // Modal do Fim de Treino (Resumo)
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+
+  // O treino de flexão só conta se o celular estiver apoiado na horizontal
+  // (paisagem), filmando a pessoa de lado a uma certa distância — não
+  // segurado na mão em pé. Detectado via acelerômetro (eixo x dominante
+  // sobre o eixo y) em vez de orientação de tela, porque a UI do app fica
+  // travada em portrait mesmo com o aparelho físico deitado de lado.
+  const [isLandscape, setIsLandscape] = useState(false);
+  const isLandscapeRef = useRef(false);
+
+  useEffect(() => {
+    isLandscapeRef.current = isLandscape;
+  }, [isLandscape]);
+
+  useEffect(() => {
+    let smoothedX = 0;
+    let smoothedY = 0;
+
+    Accelerometer.requestPermissionsAsync().catch(() => { });
+    Accelerometer.setUpdateInterval(200);
+
+    const subscription = Accelerometer.addListener(({ x, y }) => {
+      smoothedX = smoothedX * 0.7 + x * 0.3;
+      smoothedY = smoothedY * 0.7 + y * 0.3;
+
+      const landscape = Math.abs(smoothedX) > Math.abs(smoothedY) && Math.abs(smoothedX) > 0.4;
+      setIsLandscape((prev) => (prev !== landscape ? landscape : prev));
+    });
+
+    return () => subscription.remove();
+  }, []);
+
+  // Propaga o estado de orientação pra dentro da WebView sempre que ele
+  // mudar — a lógica de pose (MediaPipe) roda lá dentro, então é lá que a
+  // contagem precisa ser pausada/retomada.
+  useEffect(() => {
+    webViewRef.current?.injectJavaScript(`
+      (function() {
+        if (window.__setOrientationOk) { window.__setOrientationOk(${isLandscape}); }
+      })();
+      true;
+    `);
+  }, [isLandscape]);
 
   useEffect(() => {
     (async () => {
@@ -115,9 +159,6 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
       } else if (data.type === 'PLANK_LOST_TICK') {
         setIsPlankLost(true);
         setExitCountdown(data.value);
-      } else if (data.type === 'PLANK_RESTORED') {
-        setIsPlankLost(false);
-        setExitCountdown(null);
       } else if (data.type === 'WORKOUT_FINISHED') {
         // Quando o timer zera ("STOP"), encerra o treino e abre o modal de resumo
         stopCamera();
@@ -211,6 +252,30 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
         let exitValue = 3;
         let isExiting = false;
 
+        // Posição do ombro (e escala do tronco) no momento em que a fase
+        // "down" começou — usado pra exigir um deslocamento mínimo real do
+        // ombro até a fase "up" (ver checagem de micro-movimento mais
+        // abaixo). Sem isso, balançar só o antebraço com o tronco parado
+        // ainda contava, mesmo já deitado corretamente.
+        let downShoulderPos = null;
+        let downTorsoScale = null;
+
+        // Só conta flexão com o celular apoiado na horizontal (paisagem),
+        // filmando a pessoa de lado. O React Native detecta isso via
+        // acelerômetro (a UI do app fica travada em portrait, então não dá
+        // pra usar orientação de tela) e injeta o valor aqui.
+        let orientationOk = false;
+
+        window.__setOrientationOk = function(ok) {
+          const wasOk = orientationOk;
+          orientationOk = !!ok;
+          if (!orientationOk && wasOk !== orientationOk) {
+            resetCountdown();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            sendToRN('STATUS', { message: 'Apoie o celular na horizontal, de lado, para começar' });
+          }
+        };
+
         function sendToRN(type, payload) {
           if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(JSON.stringify({ type, ...payload }));
@@ -222,6 +287,58 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           let angle = Math.abs((radians * 180.0) / Math.PI);
           if (angle > 180.0) angle = 360 - angle;
           return angle;
+        }
+
+        function distance(A, B) {
+          return Math.hypot(B.x - A.x, B.y - A.y);
+        }
+
+        // Descobre qual eixo do FRAME BRUTO da câmera corresponde à
+        // horizontal do mundo real. Isso não é sempre o eixo X: o celular
+        // fica deitado de lado (paisagem) durante a flexão, mas o sensor
+        // da câmera muitas vezes entrega o frame no formato nativo dele —
+        // que costuma ser retrato (mais alto que largo) — mesmo com o
+        // aparelho fisicamente girado. Nesse caso, o que é horizontal no
+        // mundo real aparece alinhado com o eixo Y do vídeo, não o X.
+        // Detectamos isso comparando videoWidth x videoHeight do frame
+        // bruto (não o tamanho do canvas na tela, que já pode estar
+        // esticado pelo CSS) a cada frame, então funciona nos dois casos
+        // sem precisar supor qual é o comportamento do aparelho.
+        function isRawFrameLandscape() {
+          const w = videoElement.videoWidth || 0;
+          const h = videoElement.videoHeight || 0;
+          return w >= h;
+        }
+
+        // Ângulo do segmento A-B em relação à HORIZONTAL REAL (0° =
+        // deitado, 90° = em pé) — já considerando qual eixo do frame
+        // representa essa horizontal (ver isRawFrameLandscape). Isso é
+        // diferente de "colinearidade": uma pessoa em pé, esticada, também
+        // tem ombro-quadril-tornozelo quase alinhados (colineares) — só
+        // que na vertical. Sem essa checagem, dava pra "roubar" a flexão
+        // ficando em pé e só balançando o braço, já que só o ângulo do
+        // cotovelo era conferido depois do início do treino.
+        function angleFromHorizontal(A, B, frameIsLandscape) {
+          const dx = B.x - A.x;
+          const dy = B.y - A.y;
+          // Frame já vem "deitado" (largo): X real = X do vídeo.
+          // Frame vem "em pé" (alto): X real = Y do vídeo (eixos trocados).
+          const radians = frameIsLandscape ? Math.atan2(dy, dx) : Math.atan2(dx, dy);
+          let angle = Math.abs((radians * 180.0) / Math.PI);
+          if (angle > 90) angle = 180 - angle;
+          return angle;
+        }
+
+        // Deslocamento do ponto A pro B, medido só ao longo do eixo
+        // VERTICAL real (perpendicular ao eixo horizontal acima) —
+        // normalizado pela escala do tronco, então funciona tanto com a
+        // pessoa perto quanto longe da câmera.
+        function verticalMoveRatio(fromPoint, toPoint, torsoScale, frameIsLandscape) {
+          if (!fromPoint || !torsoScale) return Infinity;
+          const raw = frameIsLandscape
+            ? Math.abs(toPoint.y - fromPoint.y)
+            : Math.abs(toPoint.x - fromPoint.x);
+          return raw / torsoScale;
         }
 
         function drawSkeleton(shoulder, elbow, wrist, hip, knee, ankle, color = '#00e5ff') {
@@ -290,14 +407,6 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           }, 1000);
         }
 
-        function cancelExitCountdown() {
-          if (!isExiting) return;
-          clearInterval(exitTimer);
-          exitTimer = null;
-          isExiting = false;
-          sendToRN('PLANK_RESTORED', {});
-        }
-
         // Exposto para o lado React Native chamar via injectJavaScript assim
         // que o treino terminar. Para o loop do MediaPipe Camera E solta
         // explicitamente as tracks do getUserMedia — sem isso, o Android
@@ -328,11 +437,17 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           pose.setOptions({
             modelComplexity: 1,
             smoothLandmarks: true,
-            minDetectionConfidence: 0.35,
-            minTrackingConfidence: 0.35
+            minDetectionConfidence: 0.70,
+            minTrackingConfidence: 0.70
           });
 
           pose.onResults((results) => {
+            if (!orientationOk) {
+              canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+              if (!isWorkoutActive) resetCountdown();
+              return;
+            }
+
             if (!results.poseLandmarks) {
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               if (!isWorkoutActive) resetCountdown();
@@ -361,13 +476,6 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
               hip && hip.visibility > minVis &&
               ankle && ankle.visibility > minVis;
 
-            // Se o treino está ativo e o usuário sair da posição/tela, inicia o STOP de 3s
-            if (isWorkoutActive && (!hasAllPoints || wrist.visibility < minVis)) {
-              startExitCountdown();
-            } else if (isWorkoutActive && hasAllPoints && wrist.visibility >= minVis) {
-              cancelExitCountdown();
-            }
-
             if (!isWorkoutActive && !hasAllPoints) {
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               resetCountdown();
@@ -375,8 +483,31 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
               return;
             }
 
+            const frameIsLandscape = isRawFrameLandscape();
+
             const bodyAngle = calculateAngle(shoulder, hip, ankle);
             const isValidBodyLine = bodyAngle >= 135;
+
+            // Corpo tem que estar deitado (linha ombro-tornozelo perto da
+            // horizontal REAL, não só da imagem), não só "reto" — em pé o
+            // corpo também fica reto, só que na vertical.
+            // HORIZONTAL_MAX_ANGLE é a tolerância: até esse desvio da
+            // horizontal ainda conta como prancha válida (dá folga pra
+            // variações naturais de câmera/ângulo do corpo sem exigir
+            // perfeição).
+            const HORIZONTAL_MAX_ANGLE = 35;
+            const isHorizontal = angleFromHorizontal(shoulder, ankle, frameIsLandscape) <= HORIZONTAL_MAX_ANGLE;
+            const isPlankValid = isValidBodyLine && isHorizontal;
+
+            // Se o treino está ativo e o usuário sair da posição (some da
+            // câmera OU perde a postura de prancha, por exemplo ficando em
+            // pé), inicia o STOP. Antes só a visibilidade era conferida
+            // aqui — a postura só valia pra iniciar o treino, então dava
+            // pra ficar em pé "flexionando o braço" depois do início sem
+            // nada travar isso.
+            if (isWorkoutActive && (!hasAllPoints || wrist.visibility < minVis || !isPlankValid)) {
+              startExitCountdown();
+            }
 
             if (!isWorkoutActive) {
               if (!isValidBodyLine) {
@@ -385,11 +516,17 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
                 sendToRN('STATUS', { message: 'Alinhe o corpo reto em prancha' });
                 return;
               }
+              if (!isHorizontal) {
+                drawSkeleton(shoulder, elbow, wrist, hip, knee, ankle, '#ff0055');
+                resetCountdown();
+                sendToRN('STATUS', { message: 'Fique deitado, na horizontal, para começar' });
+                return;
+              }
             }
 
             // Regra do Joelho (Entre 80 e 135 desqualifica)
             const kneeAngle = calculateAngle(hip, knee, ankle);
-            if (kneeAngle >= 80 && kneeAngle <= 135) {
+            if (kneeAngle >= 0 && kneeAngle <= 135) {
               drawSkeleton(shoulder, elbow, wrist, hip, knee, ankle, '#ff0055');
               sendToRN('STATUS', { message: 'Atenção: Ângulo do joelho inválido!' });
               if (!isWorkoutActive) resetCountdown();
@@ -427,17 +564,38 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
               let stateChanged = false;
 
-              // Desceu: cotovelo dobrado (~90° ou menos)
+              // Desceu: cotovelo dobrado (~90° ou menos). Guarda a posição
+              // do ombro e a escala do tronco nesse instante — é a
+              // referência que vamos comparar lá na frente pra confirmar
+              // que o corpo realmente se moveu, não só o antebraço.
               if (elbowAngle < 100 && stage !== 'down') {
                 stage = 'down';
                 stateChanged = true;
+                downShoulderPos = { x: shoulder.x, y: shoulder.y };
+                downTorsoScale = distance(shoulder, hip);
               }
 
-              // Subiu: braço quase totalmente estendido de novo
-              if (elbowAngle > 155 && stage === 'down' && isValidBodyLine) {
-                stage = 'up';
-                count++;
-                stateChanged = true;
+              // Subiu: braço quase totalmente estendido de novo — só conta
+              // se: (1) o corpo continuar em posição de prancha válida
+              // (reto E deitado na horizontal), e (2) o ombro realmente se
+              // deslocou uma quantidade mínima desde a fase "down" (escala
+              // relativa ao tamanho do tronco no frame). O item 2 é o que
+              // impede balançar só o antebraço/cotovelo com o tronco
+              // parado: numa flexão de verdade o tronco inteiro sobe e
+              // desce, não só o braço.
+              const MIN_SHOULDER_MOVE_RATIO = 0.08;
+              const shoulderMoved =
+                verticalMoveRatio(downShoulderPos, shoulder, downTorsoScale, frameIsLandscape) >=
+                MIN_SHOULDER_MOVE_RATIO;
+
+              if (elbowAngle > 155 && stage === 'down' && isPlankValid) {
+                if (shoulderMoved) {
+                  stage = 'up';
+                  count++;
+                  stateChanged = true;
+                } else {
+                  sendToRN('STATUS', { message: 'Desça o corpo inteiro, não só o braço' });
+                }
               }
 
               if (stateChanged) {
@@ -494,6 +652,14 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
             request.grant(request.resources);
           }}
           onMessage={handleMessage}
+          onLoadEnd={() => {
+            webViewRef.current?.injectJavaScript(`
+              (function() {
+                if (window.__setOrientationOk) { window.__setOrientationOk(${isLandscapeRef.current}); }
+              })();
+              true;
+            `);
+          }}
           style={StyleSheet.absoluteFill}
         />
       )}
@@ -503,22 +669,39 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
         <View style={styles.grayOverlay} pointerEvents="none" />
       )}
 
-      {/* Overlay Vermelho ao Perder a Prancha */}
-      {isPlankLost && !showSummaryModal && (
+      {/* Overlay Vermelho ao Perder a Prancha — usa <Modal> (janela nativa
+          própria) em vez de uma View irmã da WebView: a WebView renderiza
+          numa camada nativa separada e pode ignorar o empilhamento normal
+          (zIndex) das Views do React Native, fazendo overlays comuns
+          ficarem escondidos atrás da câmera. */}
+      <Modal
+        visible={isPlankLost && !showSummaryModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
         <View style={styles.redOverlay} pointerEvents="none">
           <Text style={styles.exitTitle}>SAÍU DA POSIÇÃO!</Text>
           <Text style={styles.exitSubtitle}>Finalizando treino em</Text>
           <Text style={styles.exitCountdownText}>{exitCountdown}</Text>
           <Text style={styles.stopText}>STOP</Text>
         </View>
-      )}
+      </Modal>
 
-      {/* Countdown do Início */}
-      {countdown !== null && !isPlankLost && !showSummaryModal && (
+      {/* Countdown do Início (3, 2, 1, GO!) — mesmo motivo do Modal acima.
+          Escurece a câmera durante a contagem; ao chegar em "GO!" o
+          countdown vira null pouco depois (ver handleMessage) e o Modal
+          fecha, removendo o filtro escuro e voltando a câmera ao normal. */}
+      <Modal
+        visible={countdown !== null && !isPlankLost && !showSummaryModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
         <View style={styles.countdownContainer} pointerEvents="none">
           <Text style={styles.countdownText}>{countdown}</Text>
         </View>
-      )}
+      </Modal>
 
       {/* Botão de Sair Estilizado (Porta Vermelha) */}
       {!showSummaryModal && (
@@ -669,6 +852,7 @@ const styles = StyleSheet.create({
   },
   countdownContainer: {
     ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
@@ -695,9 +879,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     marginTop: 10,
     backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.xl,
     borderColor: '#00ff88',
     borderWidth: 1,
     textAlign: 'center',
@@ -706,9 +890,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 40,
     alignSelf: 'center',
-    paddingHorizontal: 22,
-    paddingVertical: 10,
-    borderRadius: 20,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.xl,
     zIndex: 35,
   },
   badgeText: { color: '#000', fontWeight: '800', fontSize: 14, letterSpacing: 1 },
@@ -723,7 +907,7 @@ const styles = StyleSheet.create({
   summaryCard: {
     width: 290,
     backgroundColor: '#0a0d14',
-    paddingHorizontal: 24,
+    paddingHorizontal: SPACING.xxl,
     paddingVertical: 28,
     alignItems: 'center',
     position: 'relative',
@@ -765,8 +949,8 @@ const styles = StyleSheet.create({
   exitModalButton: {
     backgroundColor: '#ff3b30',
     width: '100%',
-    paddingVertical: 12,
-    borderRadius: 6,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.sm,
     alignItems: 'center',
   },
   exitModalButtonText: {
