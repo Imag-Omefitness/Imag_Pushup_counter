@@ -13,9 +13,11 @@ import {
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useProfile } from '../context/ProfileContext';
+import { RADIUS, SPACING } from '../constants/theme';
 import CoinIcon from '../assets/icons/Omecoin.svg';
 export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
 
@@ -66,7 +68,7 @@ const EXERCISES: Exercise[] = [
     icon: 'human-handsup',
     muscle: 'Backs',
     muscleColor: '#f05a3c',
-    available: true,
+    available: false,
   },
 ];
 
@@ -85,6 +87,9 @@ const RANK_TIERS = {
 } as const;
 
 type RankTierKey = keyof typeof RANK_TIERS;
+
+const AVATAR_SIZE = 52;
+const AVATAR_GLOW_SIZE = AVATAR_SIZE + 12;
 
 function RankBadge({ tier }: { tier: RankTierKey }) {
   const t = RANK_TIERS[tier];
@@ -125,6 +130,7 @@ function ExerciseCard({
   isActive: boolean;
   onPress: (exercise: Exercise) => void;
 }) {
+  const locked = !exercise.available;
   const pressScale = useRef(new Animated.Value(1)).current;
   const pressDepth = useRef(new Animated.Value(0)).current;
 
@@ -176,20 +182,23 @@ function ExerciseCard({
             style={[
               styles.card,
               isActive && styles.cardActive,
+              locked && styles.cardLocked,
             ]}
           >
-            <View
-              style={[
-                styles.cardDot,
-                { backgroundColor: exercise.muscleColor },
-              ]}
-            />
+            {!locked && (
+              <View
+                style={[
+                  styles.cardDot,
+                  { backgroundColor: exercise.muscleColor },
+                ]}
+              />
+            )}
 
             <View style={styles.iconCircle}>
               <MaterialCommunityIcons
-                name={exercise.icon}
-                size={30}
-                color={isActive ? '#ff3b30' : '#d6d6dc'}
+                name={locked ? 'lock' : exercise.icon}
+                size={locked ? 22 : 30}
+                color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
               />
             </View>
 
@@ -197,12 +206,15 @@ function ExerciseCard({
               style={[
                 styles.cardTitle,
                 isActive && styles.cardTitleActive,
+                locked && styles.cardTitleLocked,
               ]}
               numberOfLines={1}
               adjustsFontSizeToFit
             >
               {exercise.title}
             </Text>
+
+            {locked && <Text style={styles.cardLockedLabel}>EM BREVE</Text>}
           </View>
         </Animated.View>
       </Animated.View>
@@ -314,9 +326,36 @@ export default function HomeScreen({ navigation }: Props) {
           </Text>
         </View>
 
-        <View style={styles.avatarCircle}>
-          <MaterialCommunityIcons name="account" size={34} color="#8a8a92" />
-          <View style={styles.avatarRedCorner} />
+        <View style={styles.avatarWrap}>
+          {/* Brilho neon vermelho contornando o avatar: mais forte no
+              canto inferior esquerdo e sumindo gradualmente ao redor do
+              círculo, como uma sombra sutil que se dissolve — em vez do
+              acento de canto reto que havia antes. */}
+          <Svg
+            width={AVATAR_GLOW_SIZE}
+            height={AVATAR_GLOW_SIZE}
+            style={styles.avatarGlow}
+          >
+            <Defs>
+              <RadialGradient id="avatarGlow" cx="20%" cy="82%" r="75%">
+                <Stop offset="0%" stopColor="#ff3b30" stopOpacity={0.95} />
+                <Stop offset="45%" stopColor="#ff3b30" stopOpacity={0.35} />
+                <Stop offset="100%" stopColor="#ff3b30" stopOpacity={0} />
+              </RadialGradient>
+            </Defs>
+            <Circle
+              cx={AVATAR_GLOW_SIZE / 2}
+              cy={AVATAR_GLOW_SIZE / 2}
+              r={AVATAR_SIZE / 2 + 1}
+              stroke="url(#avatarGlow)"
+              strokeWidth={3}
+              fill="none"
+            />
+          </Svg>
+
+          <View style={styles.avatarCircle}>
+            <MaterialCommunityIcons name="account" size={34} color="#8a8a92" />
+          </View>
         </View>
       </View>
 
@@ -431,37 +470,6 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     gap: 4,
   },
-  coinStack: {
-    width: 32,
-    height: 23,
-    position: 'relative',
-  },
-  coin: {
-    position: 'absolute',
-    width: 21,
-    height: 8,
-    borderRadius: 7,
-    backgroundColor: '#ffd60a',
-    borderWidth: 1,
-    borderColor: '#b99800',
-  },
-  coinBack: {
-    left: 0,
-    top: 9,
-    transform: [{ rotate: '-10deg' }],
-    opacity: 0.8,
-  },
-  coinMiddle: {
-    left: 5,
-    top: 6,
-    transform: [{ rotate: '4deg' }],
-    opacity: 0.9,
-  },
-  coinFront: {
-    left: 10,
-    top: 3,
-    transform: [{ rotate: '10deg' }],
-  },
   coinText: {
     color: '#ffd60a',
     fontFamily: 'Yearbook Solid',
@@ -482,10 +490,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#131318',
     borderWidth: 1.5,
     borderColor: '#1e1e26',
-    borderRadius: 20,
-    padding: 14,
-    marginTop: 14,
-    gap: 12,
+    borderRadius: RADIUS.xl,
+    padding: SPACING.md,
+    marginTop: SPACING.md,
+    gap: SPACING.md,
   },
   profileInfo: {
     flex: 1,
@@ -591,7 +599,7 @@ const styles = StyleSheet.create({
     borderColor: '#ffd60a',
     paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 8,
+    borderRadius: RADIUS.sm,
     gap: 3,
   },
   trophyText: {
@@ -599,28 +607,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
   },
+  avatarWrap: {
+    width: AVATAR_GLOW_SIZE,
+    height: AVATAR_GLOW_SIZE,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarGlow: {
+    position: 'absolute',
+  },
   avatarCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    borderRadius: AVATAR_SIZE / 2,
     backgroundColor: '#1e1e26',
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
-    position: 'relative',
-  },
-  avatarRedCorner: {
-    position: 'absolute',
-    left: -1,
-    bottom: -1,
-    width: 29,
-    height: 29,
-    borderWidth: 3,
-    borderTopColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderLeftColor: '#ff3b30',
-    borderBottomColor: '#ff3b30',
-    borderRadius: 16,
   },
   xpRow: {
     flexDirection: 'row',
@@ -633,7 +636,7 @@ const styles = StyleSheet.create({
     borderColor: '#ff3b30',
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 10,
+    borderRadius: RADIUS.md,
   },
   lvBadgeText: {
     color: '#ff3b30',
@@ -774,8 +777,8 @@ const styles = StyleSheet.create({
     width: '100%',
     aspectRatio: 1,
     backgroundColor: '#15151f',
-    borderRadius: 16,
-    padding: 10,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.sm,
     borderWidth: 1.5,
     borderColor: '#171722',
     justifyContent: 'flex-end',
@@ -784,6 +787,9 @@ const styles = StyleSheet.create({
   cardActive: {
     borderColor: '#ff3b30',
     backgroundColor: '#18151c',
+  },
+  cardLocked: {
+    opacity: 0.55,
   },
   cardDot: {
     position: 'absolute',
@@ -815,6 +821,16 @@ const styles = StyleSheet.create({
   },
   cardTitleActive: {
     color: '#ff6b61',
+  },
+  cardTitleLocked: {
+    color: '#6b6b73',
+  },
+  cardLockedLabel: {
+    color: '#6b6b73',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    marginTop: 2,
   },
   bottomNav: {
     flexDirection: 'row',
