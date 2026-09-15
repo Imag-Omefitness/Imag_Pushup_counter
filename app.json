@@ -27,6 +27,14 @@
         {
           "cameraPermission": "Usamos a câmera para detectar sua pose e contar flexões."
         }
+      ],
+      "expo-font",
+      "expo-status-bar",
+      [
+        "expo-navigation-bar",
+        {
+          "hidden": true
+        }
       ]
     ]
   }

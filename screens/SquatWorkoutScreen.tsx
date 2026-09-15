@@ -5,12 +5,17 @@
 // cada landmark permanece correta e alinhada ao vídeo, em pé, na vertical).
 
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, Pressable, Alert, Modal } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, Pressable, Modal } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Camera } from 'expo-camera';
+import { Accelerometer } from 'expo-sensors';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
+import { useProfile } from '../context/ProfileContext';
+import { RADIUS, SPACING } from '../constants/theme';
+import WorkoutTutorialModal, { useWorkoutTutorial } from '../components/WorkoutTutorialModal';
+import ExitWorkoutModal from '../components/ExitWorkoutModal';
 
 export type Stage = 'up' | 'down' | 'unknown';
 
@@ -27,7 +32,10 @@ const CALORIES_PER_REP = 0.32;
 // com muitas repetições.
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+const SQUAT_TUTORIAL_STORAGE_KEY = '@pushup_counter/squat_tutorial_hidden';
+
 export default function SquatWorkoutScreen({ navigation }: Props) {
+  const { addXp } = useProfile();
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [count, setCount] = useState(0);
   const [stage, setStage] = useState<Stage>('unknown');
@@ -46,6 +54,52 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
 
   // Modal de fim de treino (resumo)
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+
+  const tutorial = useWorkoutTutorial(SQUAT_TUTORIAL_STORAGE_KEY);
+  const [showExitModal, setShowExitModal] = useState(false);
+
+  // O agachamento só conta com o celular apoiado na VERTICAL (retrato,
+  // em pé), filmando a pessoa de corpo inteiro de frente/lado — o oposto da
+  // flexão/abdominal, que exigem o aparelho deitado de lado. Mesma detecção
+  // via acelerômetro das outras telas (eixo y dominante sobre o eixo x
+  // quando o celular está em pé), porque a UI do app fica travada em
+  // portrait mesmo que o aparelho físico esteja deitado.
+  const [isPortrait, setIsPortrait] = useState(false);
+  const isPortraitRef = useRef(false);
+
+  useEffect(() => {
+    isPortraitRef.current = isPortrait;
+  }, [isPortrait]);
+
+  useEffect(() => {
+    let smoothedX = 0;
+    let smoothedY = 0;
+
+    Accelerometer.requestPermissionsAsync().catch(() => { });
+    Accelerometer.setUpdateInterval(200);
+
+    const subscription = Accelerometer.addListener(({ x, y }) => {
+      smoothedX = smoothedX * 0.7 + x * 0.3;
+      smoothedY = smoothedY * 0.7 + y * 0.3;
+
+      const portrait = Math.abs(smoothedY) > Math.abs(smoothedX) && Math.abs(smoothedY) > 0.4;
+      setIsPortrait((prev) => (prev !== portrait ? portrait : prev));
+    });
+
+    return () => subscription.remove();
+  }, []);
+
+  // Propaga o estado de orientação pra dentro da WebView sempre que ele
+  // mudar — a lógica de pose (MediaPipe) roda lá dentro, então é lá que a
+  // contagem precisa ser pausada/retomada.
+  useEffect(() => {
+    webViewRef.current?.injectJavaScript(`
+      (function() {
+        if (window.__setOrientationOk) { window.__setOrientationOk(${isPortrait}); }
+      })();
+      true;
+    `);
+  }, [isPortrait]);
 
   useEffect(() => {
     (async () => {
@@ -75,8 +129,8 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
   }, [isWorkoutActive, isPositionLost]);
 
   // Para o stream de câmera de dentro da WebView explicitamente assim que o
-  // treino termina — evita a câmera preta ao abrir o próximo treino (ver
-  // explicação completa na PushupWorkoutScreen, mesmo bug/mesma correção).
+  // treino termina — evita a câmera preta ao abrir o próximo treino (mesmo
+  // bug/mesma correção da PushupWorkoutScreen).
   const stopCamera = () => {
     webViewRef.current?.injectJavaScript(`
       (function() {
@@ -125,6 +179,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         setExitCountdown(null);
       } else if (data.type === 'WORKOUT_FINISHED') {
         stopCamera();
+        addXp(round1(count * XP_PER_REP));
         setIsPositionLost(false);
         setIsWorkoutActive(false);
         setShowSummaryModal(true);
@@ -134,24 +189,17 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
     }
   };
 
-  const handleExitPress = () => {
-    Alert.alert('Sair do treino', 'Deseja mesmo sair do treino atual?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Sair',
-        style: 'destructive',
-        onPress: () => {
-          stopCamera();
-          setIsWorkoutActive(false);
-          setShowSummaryModal(true);
-        },
-      },
-    ]);
+  const handleConfirmExit = () => {
+    setShowExitModal(false);
+    stopCamera();
+    addXp(round1(count * XP_PER_REP));
+    setIsWorkoutActive(false);
+    setShowSummaryModal(true);
   };
 
   const handleFinishAndNavigate = () => {
     setShowSummaryModal(false);
-    navigation.navigate('Home', { gainedXp: round1(count * XP_PER_REP) });
+    navigation.navigate('Home');
   };
 
   const xpEarned = round1(count * XP_PER_REP);
@@ -168,6 +216,51 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
     }
     return `${pad(mins)}:${pad(secs)}`;
   };
+
+  // HUD do treino (contador de repetições no topo + badge de estado embaixo).
+  //
+  // Os overlays de contagem regressiva ("3 2 1 GO") e de saída ("3 2 1 STOP")
+  // são <Modal>, ou seja, janelas NATIVAS separadas que ficam por cima de
+  // tudo desta tela — inclusive do HUD, que some enquanto elas estão
+  // visíveis. Por isso o HUD é uma função reaproveitada: ele é renderizado
+  // de novo DENTRO de cada modal, no mesmo lugar (topo/rodapé), enquanto o
+  // número da contagem regressiva fica centralizado no meio da tela. Assim o
+  // contador de repetições continua legível e nada se sobrepõe.
+  const renderHud = () => (
+    <>
+      <View style={styles.overlay} pointerEvents="none">
+        <Text style={styles.count}>{count}</Text>
+        <Text style={styles.label}>AGACHAMENTOS VÁLIDOS</Text>
+        <Text style={styles.feedback}>{feedback}</Text>
+      </View>
+
+      <View
+        pointerEvents="none"
+        style={[
+          styles.badge,
+          {
+            backgroundColor: isPositionLost
+              ? '#ff0055'
+              : stage === 'down'
+                ? '#ff0055'
+                : stage === 'up'
+                  ? '#00ff88'
+                  : '#6c757d',
+          },
+        ]}
+      >
+        <Text style={styles.badgeText}>
+          {isPositionLost
+            ? 'FORA DA POSIÇÃO'
+            : stage === 'down'
+              ? 'AGACHADO (SUBA)'
+              : stage === 'up'
+                ? 'EM PÉ (DESÇA)'
+                : 'FIQUE EM PÉ'}
+        </Text>
+      </View>
+    </>
+  );
 
   const htmlContent = `
     <!DOCTYPE html>
@@ -212,10 +305,54 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         let exitValue = 3;
         let isExiting = false;
 
+        // Referências da pessoa EM PÉ (calibradas enquanto o treino não
+        // começou, e reajustadas devagar no topo de cada repetição):
+        // - altura do quadril e do ombro acima dos tornozelos, medidas em
+        //   "comprimentos de tronco" (pra saber o quanto o corpo desceu);
+        // - ângulo médio dos joelhos esticados (pra medir o quanto eles
+        //   dobraram a partir da posição real da pessoa, e não de um valor
+        //   fixo que varia com o ângulo da câmera).
+        let standingHipHeight = null;
+        let standingShoulderHeight = null;
+        let standingKneeAngle = null;
+
+        // Só conta agachamento com o celular apoiado na VERTICAL (retrato,
+        // em pé) — o React Native detecta isso via acelerômetro e injeta o
+        // valor aqui.
+        let orientationOk = false;
+
+        window.__setOrientationOk = function(ok) {
+          const wasOk = orientationOk;
+          orientationOk = !!ok;
+          if (!orientationOk && wasOk !== orientationOk) {
+            resetCountdown();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            sendToRN('STATUS', { message: 'Segure o celular na vertical, em pé, para começar' });
+          }
+        };
+
         function sendToRN(type, payload) {
           if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(JSON.stringify({ type, ...payload }));
           }
+        }
+
+        // Os avisos de forma (ver estado 'up' abaixo) são avaliados a cada
+        // frame; sem esse filtro seriam dezenas de postMessage por segundo
+        // repetindo o mesmo texto.
+        let lastStatusMessage = null;
+
+        function sendStatus(message) {
+          if (message === lastStatusMessage) return;
+          lastStatusMessage = message;
+          sendToRN('STATUS', { message });
+        }
+
+        // Qualquer outra mensagem (UPDATE, COUNTDOWN...) reescreve o texto de
+        // feedback no lado React Native, então o filtro acima precisa
+        // esquecer o último status pra ele poder reaparecer.
+        function invalidateStatus() {
+          lastStatusMessage = null;
         }
 
         function calculateAngle(A, B, C) {
@@ -223,6 +360,42 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           let angle = Math.abs((radians * 180.0) / Math.PI);
           if (angle > 180.0) angle = 360 - angle;
           return angle;
+        }
+
+        function midpoint(A, B) {
+          return { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+        }
+
+        function distance(A, B) {
+          return Math.hypot(B.x - A.x, B.y - A.y);
+        }
+
+        // Ângulo do segmento A-B em relação à VERTICAL REAL (0° = em pé
+        // reto, 90° = dobrado na horizontal). Com o celular travado na
+        // vertical (ver orientationOk acima), o eixo Y do frame já
+        // corresponde à vertical do mundo real, sem precisar da troca de
+        // eixo usada na flexão/abdominal (que dependem do celular deitado).
+        // Usado pra medir o quanto o tronco se inclina pra frente — sem
+        // essa checagem, dava pra "roubar" o agachamento só dobrando o
+        // joelho e inclinando o tronco pra frente, sem abaixar o quadril.
+        function angleFromVertical(A, B) {
+          const dx = B.x - A.x;
+          const dy = B.y - A.y;
+          const radians = Math.atan2(dx, dy);
+          let angle = Math.abs((radians * 180.0) / Math.PI);
+          if (angle > 90) angle = 180 - angle;
+          return angle;
+        }
+
+        // Altura do quadril acima dos tornozelos, medida em "comprimentos de
+        // tronco". Normalizar pelo tronco (segmento rígido, e que continua
+        // do mesmo tamanho na imagem esteja a pessoa de frente ou de lado)
+        // deixa o valor independente da distância até a câmera: a pessoa
+        // pode se afastar ou se aproximar que o número não muda.
+        function heightInTorsos(point, shoulderMid, hipMid, ankleMid) {
+          const torsoLength = distance(shoulderMid, hipMid);
+          if (torsoLength < 0.01) return null;
+          return (ankleMid.y - point.y) / torsoLength;
         }
 
         // Landmark "na tela" = visível E dentro dos limites normalizados do
@@ -237,26 +410,83 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           );
         }
 
-        function drawSkeleton(shoulder, hip, knee, ankle, color = '#00e5ff') {
+        // SUAVIZAÇÃO TEMPORAL (EMA — média móvel exponencial).
+        //
+        // Por quê: a versão anterior escolhia UM lado só (o mais visível
+        // naquele frame específico) pra calcular o ângulo do joelho. Isso
+        // funcionava, mas cada frame podia "trocar de lado" dependendo de
+        // qual perna o MediaPipe enxergava melhor naquele instante — dando
+        // uma leitura instável. A correção pra exigir as DUAS pernas ao
+        // mesmo tempo tornou esse problema mais visível: agora qualquer
+        // tremor/ruído momentâneo em UM ponto (de qualquer uma das duas
+        // pernas) já é suficiente pra bagunçar a leitura do frame inteiro.
+        //
+        // Em vez de usar a posição crua de cada landmark (que pode saltar
+        // de um frame pro outro por ruído do modelo), mantemos uma versão
+        // "suavizada" que se move gradualmente em direção à posição nova a
+        // cada frame, na proporção de SMOOTHING_ALPHA. Isso funciona como
+        // um filtro passa-baixa: ruído de alta frequência (tremor de 1
+        // frame) é atenuado, mas o movimento real da pessoa (que acontece
+        // ao longo de vários frames) continua sendo seguido de perto.
+        let smoothedLandmarks = null;
+        const SMOOTHING_ALPHA = 0.55; // 0 = travado (ignora tudo de novo), 1 = sem suavização (cru)
+
+        function smoothLandmarks(rawLandmarks) {
+          if (!smoothedLandmarks) {
+            // Primeiro frame válido depois de perder a pose: inicializa
+            // igual ao cru, sem suavizar — senão o esqueleto "voaria" da
+            // última posição válida até a nova ao reaparecer.
+            smoothedLandmarks = rawLandmarks.map((p) => ({
+              x: p.x, y: p.y, z: p.z, visibility: p.visibility,
+            }));
+            return smoothedLandmarks;
+          }
+
+          for (let i = 0; i < rawLandmarks.length; i++) {
+            const raw = rawLandmarks[i];
+            const prev = smoothedLandmarks[i];
+            smoothedLandmarks[i] = {
+              x: prev.x + SMOOTHING_ALPHA * (raw.x - prev.x),
+              y: prev.y + SMOOTHING_ALPHA * (raw.y - prev.y),
+              z: prev.z + SMOOTHING_ALPHA * (raw.z - prev.z),
+              // Visibilidade NÃO é suavizada — precisa refletir o frame
+              // atual pra detectar corretamente quando um ponto sai do
+              // enquadramento sem atraso.
+              visibility: raw.visibility,
+            };
+          }
+
+          return smoothedLandmarks;
+        }
+
+        // Esqueleto completo: as duas pernas, os dois braços e o tronco.
+        const SKELETON_CONNECTIONS = [
+          [11, 12], // ombro-ombro
+          [11, 13], [13, 15], // braço esquerdo (ombro-cotovelo-pulso)
+          [12, 14], [14, 16], // braço direito
+          [11, 23], [12, 24], // ombro-quadril (tronco)
+          [23, 24], // quadril-quadril
+          [23, 25], [25, 27], // perna esquerda (quadril-joelho-tornozelo)
+          [24, 26], [26, 28], // perna direita
+        ];
+
+        function drawSkeleton(kp, color = '#00e5ff') {
           canvasElement.width = videoElement.videoWidth || 640;
           canvasElement.height = videoElement.videoHeight || 480;
           canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
           const w = canvasElement.width;
           const h = canvasElement.height;
-
-          const lines = [
-            [shoulder, hip],
-            [hip, knee],
-            [knee, ankle]
-          ];
+          const minDrawVis = 0.3;
 
           canvasCtx.lineWidth = 6;
           canvasCtx.strokeStyle = color;
           canvasCtx.lineCap = 'round';
 
-          lines.forEach(([p1, p2]) => {
-            if (p1 && p2) {
+          SKELETON_CONNECTIONS.forEach(([i1, i2]) => {
+            const p1 = kp[i1];
+            const p2 = kp[i2];
+            if (p1 && p2 && p1.visibility > minDrawVis && p2.visibility > minDrawVis) {
               canvasCtx.beginPath();
               canvasCtx.moveTo(p1.x * w, p1.y * h);
               canvasCtx.lineTo(p2.x * w, p2.y * h);
@@ -264,9 +494,10 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
             }
           });
 
-          const points = [shoulder, hip, knee, ankle];
-          points.forEach((p) => {
-            if (p) {
+          const pointIndexes = [11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+          pointIndexes.forEach((i) => {
+            const p = kp[i];
+            if (p && p.visibility > minDrawVis) {
               canvasCtx.beginPath();
               canvasCtx.arc(p.x * w, p.y * h, 8, 0, 2 * Math.PI);
               canvasCtx.fillStyle = '#ffffff';
@@ -341,37 +572,54 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           pose.setOptions({
             modelComplexity: 1,
             smoothLandmarks: true,
-            minDetectionConfidence: 0.4,
-            minTrackingConfidence: 0.4
+            minDetectionConfidence: 0.7,
+            minTrackingConfidence: 0.7
           });
 
           pose.onResults((results) => {
+            if (!orientationOk) {
+              smoothedLandmarks = null;
+              canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+              if (!isWorkoutActive) resetCountdown();
+              return;
+            }
+
             if (!results.poseLandmarks) {
+              // Reseta a suavização: sem isso, ao reaparecer na câmera o
+              // esqueleto ficaria "grudado" na última posição válida antes
+              // de sumir, e demoraria vários frames pra alcançar a posição
+              // real (efeito de arrasto indesejado após uma oclusão).
+              smoothedLandmarks = null;
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               if (!isWorkoutActive) resetCountdown();
               if (isWorkoutActive) startExitCountdown();
               return;
             }
 
-            const kp = results.poseLandmarks;
+            const kp = smoothLandmarks(results.poseLandmarks);
 
-            const leftVis = (kp[11]?.visibility || 0) + (kp[23]?.visibility || 0) + (kp[25]?.visibility || 0) + (kp[27]?.visibility || 0);
-            const rightVis = (kp[12]?.visibility || 0) + (kp[24]?.visibility || 0) + (kp[26]?.visibility || 0) + (kp[28]?.visibility || 0);
-            const isLeft = leftVis >= rightVis;
+            const leftHip = kp[23];
+            const rightHip = kp[24];
+            const leftKnee = kp[25];
+            const rightKnee = kp[26];
+            const leftAnkle = kp[27];
+            const rightAnkle = kp[28];
+            const leftShoulder = kp[11];
+            const rightShoulder = kp[12];
 
-            const shoulder = isLeft ? kp[11] : kp[12];
-            const hip = isLeft ? kp[23] : kp[24];
-            const knee = isLeft ? kp[25] : kp[26];
-            const ankle = isLeft ? kp[27] : kp[28];
-
-            // Exige o corpo inteiro (ombro até tornozelo) visível e dentro
-            // do enquadramento - filtro "todos os pontos na tela".
+            // Exige as duas pernas inteiras (ombro até tornozelo, dos dois
+            // lados) visíveis e dentro do enquadramento - filtro "todos os
+            // pontos na tela".
             const minVis = 0.5;
             const hasAllPoints =
-              isOnScreen(shoulder, minVis) &&
-              isOnScreen(hip, minVis) &&
-              isOnScreen(knee, minVis) &&
-              isOnScreen(ankle, minVis);
+              isOnScreen(leftShoulder, minVis) &&
+              isOnScreen(rightShoulder, minVis) &&
+              isOnScreen(leftHip, minVis) &&
+              isOnScreen(rightHip, minVis) &&
+              isOnScreen(leftKnee, minVis) &&
+              isOnScreen(rightKnee, minVis) &&
+              isOnScreen(leftAnkle, minVis) &&
+              isOnScreen(rightAnkle, minVis);
 
             if (isWorkoutActive && !hasAllPoints) {
               startExitCountdown();
@@ -382,29 +630,119 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
             if (!isWorkoutActive && !hasAllPoints) {
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               resetCountdown();
-              sendToRN('STATUS', { message: 'Fique de corpo inteiro visível na câmera' });
+              sendStatus('Fique de corpo inteiro visível na câmera');
               return;
             }
 
-            // Ângulo do joelho (quadril-joelho-tornozelo) e do quadril
-            // (ombro-quadril-joelho). Exigir os dois evita falso positivo
-            // de "agachou" quando a pessoa só dobra o joelho sem descer o
-            // quadril de verdade.
-            const kneeAngle = calculateAngle(hip, knee, ankle);
-            const hipAngle = calculateAngle(shoulder, hip, knee);
-            const isStanding = kneeAngle > 160 && hipAngle > 155;
+            // Ângulo de CADA joelho (quadril-joelho-tornozelo), calculado
+            // separadamente pro lado esquerdo e direito. Só conta o
+            // movimento quando os DOIS joelhos dobram (e depois os DOIS
+            // estendem de novo) — evita contar agachamento assimétrico ou
+            // um "chute" de perna só.
+            const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
+            const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
+
+            // Pontos médios (esquerdo+direito) do quadril, ombro e
+            // tornozelo — usados pros vetores de corpo inteiro abaixo em
+            // vez de só um lado, então ruído/oclusão de um lado só não
+            // derruba a leitura.
+            const hipMid = midpoint(leftHip, rightHip);
+            const shoulderMid = midpoint(leftShoulder, rightShoulder);
+            const ankleMid = midpoint(leftAnkle, rightAnkle);
+
+            // Ângulo do tronco (ombro-quadril) em relação à vertical real —
+            // precisa continuar razoavelmente ereto. Sem essa checagem,
+            // dava pra "roubar" o agachamento só se curvando pra frente
+            // (dobrar a cintura) sem realmente flexionar o joelho e abaixar
+            // o quadril.
+            const torsoAngle = angleFromVertical(shoulderMid, hipMid);
+            const isTorsoUpright = torsoAngle <= 55;
+
+            const kneeAngleAvg = (leftKneeAngle + rightKneeAngle) / 2;
+
+            // Limiares do ângulo de joelho.
+            //
+            // KNEE_STRAIGHT: no topo os dois joelhos precisam estar
+            // realmente esticados — é o começo da "amplitude completa" que o
+            // treino exige.
+            // KNEE_BENT_MAX / KNEE_DELTA_DOWN: pra considerar "dobrado"
+            // basta uma dobra moderada, mas ela é medida DUAS vezes: pelo
+            // ângulo absoluto e pela variação em relação ao ângulo que os
+            // joelhos tinham em pé (KNEE_DELTA_DOWN). A variação é o que
+            // salva a leitura quando a pessoa está de frente pra câmera,
+            // onde o ângulo absoluto projetado em 2D fica sempre alto.
+            const KNEE_STRAIGHT = 158;
+            const KNEE_BENT_MAX = 168;
+            const KNEE_DELTA_DOWN = 14;
+            const KNEE_DELTA_UP = 7;
+
+            const kneeDrop =
+              standingKneeAngle !== null ? standingKneeAngle - kneeAngleAvg : 0;
+
+            const bothStanding =
+              leftKneeAngle > KNEE_STRAIGHT &&
+              rightKneeAngle > KNEE_STRAIGHT &&
+              (standingKneeAngle === null || kneeDrop <= KNEE_DELTA_UP);
+
+            const bothBent =
+              leftKneeAngle < KNEE_BENT_MAX &&
+              rightKneeAngle < KNEE_BENT_MAX &&
+              standingKneeAngle !== null &&
+              kneeDrop >= KNEE_DELTA_DOWN;
+
+            // PROFUNDIDADE DO AGACHAMENTO
+            //
+            // Contar agachamento só pelo ângulo do joelho não funciona bem
+            // com a pessoa de FRENTE pra câmera: a dobra do joelho acontece
+            // em profundidade (o eixo que a câmera achata), então o ângulo
+            // projetado em 2D quase não muda mesmo num agachamento completo.
+            //
+            // O que a câmera SEMPRE enxerga bem é o movimento vertical, que
+            // está no plano da imagem. Então medimos o quanto o CORPO INTEIRO
+            // desceu: "depth" (quadril) e "shoulderDepth" (ombro) são a
+            // fração de altura perdida em relação à posição em pé (0 = em
+            // pé, ~0.2 = meio agachamento, 0.35+ = agachamento completo).
+            // Exigir os dois juntos significa que o corpo todo desceu — não
+            // dá pra validar a repetição só dobrando/esticando o joelho com o
+            // corpo parado na mesma altura.
+            const hipHeight = heightInTorsos(hipMid, shoulderMid, hipMid, ankleMid);
+            const shoulderHeight = heightInTorsos(shoulderMid, shoulderMid, hipMid, ankleMid);
+            const depth =
+              hipHeight !== null && standingHipHeight
+                ? 1 - hipHeight / standingHipHeight
+                : 0;
+            const shoulderDepth =
+              shoulderHeight !== null && standingShoulderHeight
+                ? 1 - shoulderHeight / standingShoulderHeight
+                : 0;
 
             if (!isWorkoutActive) {
-              if (!isStanding) {
-                drawSkeleton(shoulder, hip, knee, ankle, '#ff0055');
+              // Antes do treino começar ainda não existe referência de "em
+              // pé", então aqui o critério de joelho esticado é só o ângulo
+              // absoluto (o delta só passa a valer depois da calibração).
+              const kneesExtended =
+                leftKneeAngle > KNEE_STRAIGHT && rightKneeAngle > KNEE_STRAIGHT;
+
+              if (!kneesExtended || !isTorsoUpright) {
+                drawSkeleton(kp, '#ff0055');
                 resetCountdown();
-                sendToRN('STATUS', { message: 'Fique em pé para começar' });
+                sendStatus('Fique em pé, ereto, com as duas pernas visíveis, para começar');
                 return;
               }
+
+              // Chegou aqui = está de pé e ereto. Esse é o momento certo de
+              // calibrar as referências de altura e de joelho esticado.
+              if (hipHeight !== null) {
+                standingHipHeight = hipHeight;
+              }
+              if (shoulderHeight !== null) {
+                standingShoulderHeight = shoulderHeight;
+              }
+              standingKneeAngle = kneeAngleAvg;
             }
 
             const skeletonColor = isExiting ? '#ff0055' : (isWorkoutActive ? '#00ff88' : '#00e5ff');
-            drawSkeleton(shoulder, hip, knee, ankle, skeletonColor);
+            drawSkeleton(kp, skeletonColor);
 
             if (!isCountingDown && !isWorkoutActive) {
               isCountingDown = true;
@@ -432,20 +770,75 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
             if (isWorkoutActive && !isExiting) {
               let stateChanged = false;
 
-              // Desceu o suficiente: joelho e quadril bem flexionados
-              if (kneeAngle < 100 && hipAngle < 130 && stage !== 'down') {
+              const DEPTH_DOWN = 0.15;
+              const DEPTH_UP = 0.07;
+              // O ombro desce um pouco menos que o quadril (o tronco se
+              // inclina pra frente na descida), por isso o limiar dele é
+              // proporcionalmente menor.
+              const SHOULDER_DEPTH_DOWN = DEPTH_DOWN * 0.6;
+
+              // DESCEU = o CORPO INTEIRO baixou (quadril E ombro) E os dois
+              // joelhos dobraram. É um E, não um OU: os dois sinais juntos
+              // são o que impede validar a repetição só dobrando e
+              // esticando o joelho com o corpo parado na mesma altura
+              // (quadril/ombro sem descer), ou só afundando o corpo sem
+              // flexionar as pernas.
+              const bodyWentDown =
+                depth >= DEPTH_DOWN && shoulderDepth >= SHOULDER_DEPTH_DOWN;
+              const isDown = bodyWentDown && bothBent;
+
+              // SUBIU = o corpo voltou pra altura de pé E os dois joelhos
+              // estão esticados de novo (amplitude completa). A faixa morta
+              // entre DEPTH_UP e DEPTH_DOWN (histerese) evita contar várias
+              // repetições com um tremor em cima do limiar.
+              const isUp =
+                depth <= DEPTH_UP &&
+                shoulderDepth <= DEPTH_UP + 0.05 &&
+                bothStanding;
+
+              if (isDown && stage !== 'down') {
                 stage = 'down';
                 stateChanged = true;
               }
 
-              // Voltou a ficar de pé (extensão completa): conta a repetição
-              if (kneeAngle > 160 && hipAngle > 155 && stage === 'down') {
-                stage = 'up';
-                count++;
-                stateChanged = true;
+              // Feedback de "quase lá": ajuda a pessoa a entender por que a
+              // repetição não contou quando só um dos dois sinais apareceu.
+              if (stage !== 'down') {
+                if (bothBent && !bodyWentDown) {
+                  sendStatus('Desça o corpo todo, não só dobre os joelhos');
+                } else if (bodyWentDown && !bothBent) {
+                  sendStatus('Dobre mais os joelhos ao descer');
+                }
+              }
+
+              if (isUp && stage === 'down') {
+                if (isTorsoUpright) {
+                  stage = 'up';
+                  count++;
+                  stateChanged = true;
+                } else {
+                  sendStatus('Mantenha o tronco mais ereto');
+                }
+              }
+
+              // No topo, reajusta devagar as referências de "em pé". Cobre a
+              // pessoa mudando de lugar no meio do treino sem estragar a
+              // contagem — e é lento o bastante (5% por frame) pra não
+              // acompanhar a descida de uma repetição.
+              if (stage === 'up' && depth < 0.05 && shoulderDepth < 0.05) {
+                if (hipHeight !== null && standingHipHeight) {
+                  standingHipHeight = standingHipHeight * 0.95 + hipHeight * 0.05;
+                }
+                if (shoulderHeight !== null && standingShoulderHeight) {
+                  standingShoulderHeight = standingShoulderHeight * 0.95 + shoulderHeight * 0.05;
+                }
+                if (standingKneeAngle !== null && kneeAngleAvg > KNEE_STRAIGHT) {
+                  standingKneeAngle = standingKneeAngle * 0.95 + kneeAngleAvg * 0.05;
+                }
               }
 
               if (stateChanged) {
+                invalidateStatus();
                 sendToRN('UPDATE', { count, stage });
               }
             }
@@ -481,7 +874,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {hasPermission && (
+      {hasPermission && tutorial.checked && !tutorial.visible && (
         <WebView
           ref={webViewRef}
           originWhitelist={['*']}
@@ -499,6 +892,14 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
             request.grant(request.resources);
           }}
           onMessage={handleMessage}
+          onLoadEnd={() => {
+            webViewRef.current?.injectJavaScript(`
+              (function() {
+                if (window.__setOrientationOk) { window.__setOrientationOk(${isPortraitRef.current}); }
+              })();
+              true;
+            `);
+          }}
           style={StyleSheet.absoluteFill}
         />
       )}
@@ -507,62 +908,57 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         <View style={styles.grayOverlay} pointerEvents="none" />
       )}
 
-      {isPositionLost && !showSummaryModal && (
+      {/* A WebView roda numa camada nativa própria e pode ignorar o
+          empilhamento normal (zIndex) das Views do React Native — por isso
+          esses dois overlays usam <Modal> (janela nativa separada) em vez de
+          serem Views irmãs da WebView, que ficavam escondidas atrás da
+          câmera (mesma correção já usada na tela de flexão). */}
+      <Modal
+        visible={isPositionLost && !showSummaryModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
         <View style={styles.redOverlay} pointerEvents="none">
-          <Text style={styles.exitTitle}>SAÍU DA POSIÇÃO!</Text>
-          <Text style={styles.exitSubtitle}>Finalizando treino em</Text>
-          <Text style={styles.exitCountdownText}>{exitCountdown}</Text>
-          <Text style={styles.stopText}>STOP</Text>
+          <View style={styles.centerStack}>
+            <Text style={styles.exitTitle}>SAÍU DA POSIÇÃO!</Text>
+            <Text style={styles.exitSubtitle}>Finalizando treino em</Text>
+            <Text style={styles.exitCountdownText}>{exitCountdown}</Text>
+            <Text style={styles.stopText}>STOP</Text>
+          </View>
+          {/* Mesmo SafeAreaView da tela de fora, pra que o HUD caia
+              exatamente na mesma posição dentro da janela do modal. */}
+          <SafeAreaView style={StyleSheet.absoluteFill} pointerEvents="none">
+            {renderHud()}
+          </SafeAreaView>
         </View>
-      )}
+      </Modal>
 
-      {countdown !== null && !isPositionLost && !showSummaryModal && (
+      <Modal
+        visible={countdown !== null && !isPositionLost && !showSummaryModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
         <View style={styles.countdownContainer} pointerEvents="none">
-          <Text style={styles.countdownText}>{countdown}</Text>
+          <View style={styles.centerStack}>
+            <Text style={styles.countdownText}>{countdown}</Text>
+          </View>
+          {/* Mesmo SafeAreaView da tela de fora, pra que o HUD caia
+              exatamente na mesma posição dentro da janela do modal. */}
+          <SafeAreaView style={StyleSheet.absoluteFill} pointerEvents="none">
+            {renderHud()}
+          </SafeAreaView>
         </View>
-      )}
+      </Modal>
 
       {!showSummaryModal && (
-        <Pressable style={styles.doorBackButton} onPress={handleExitPress}>
+        <Pressable style={styles.doorBackButton} onPress={() => setShowExitModal(true)}>
           <MaterialCommunityIcons name="door-open" size={26} color="#ff3b30" />
         </Pressable>
       )}
 
-      {!showSummaryModal && (
-        <>
-          <View style={styles.overlay} pointerEvents="none">
-            <Text style={styles.count}>{count}</Text>
-            <Text style={styles.label}>AGACHAMENTOS VÁLIDOS</Text>
-            <Text style={styles.feedback}>{feedback}</Text>
-          </View>
-
-          <View
-            pointerEvents="none"
-            style={[
-              styles.badge,
-              {
-                backgroundColor: isPositionLost
-                  ? '#ff0055'
-                  : stage === 'down'
-                    ? '#ff0055'
-                    : stage === 'up'
-                      ? '#00ff88'
-                      : '#6c757d',
-              },
-            ]}
-          >
-            <Text style={styles.badgeText}>
-              {isPositionLost
-                ? 'FORA DA POSIÇÃO'
-                : stage === 'down'
-                  ? 'AGACHADO (SUBA)'
-                  : stage === 'up'
-                    ? 'EM PÉ (DESÇA)'
-                    : 'FIQUE EM PÉ'}
-            </Text>
-          </View>
-        </>
-      )}
+      {!showSummaryModal && renderHud()}
 
       {/* Modal de Fim de Treino (mesmo estilo neon usado na flexão) */}
       <Modal visible={showSummaryModal} transparent animationType="fade">
@@ -602,6 +998,26 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           </View>
         </View>
       </Modal>
+
+      {/* Tutorial de posicionamento (primeira vez / até o usuário marcar
+          "não mostrar novamente"). Tocar em qualquer lugar avança pro
+          próximo passo ou fecha no último — exceto na caixinha de
+          checkbox, que é um Pressable aninhado e por isso captura o toque
+          antes dele "vazar" pro Pressable de fora. */}
+      <WorkoutTutorialModal
+        visible={tutorial.visible}
+        orientation="vertical"
+        onDismiss={tutorial.dismiss}
+      />
+
+      <ExitWorkoutModal
+        visible={showExitModal}
+        reps={count}
+        repsLabel="AGACHAMENTOS"
+        elapsedLabel={formatTime(durationSeconds)}
+        onCancel={() => setShowExitModal(false)}
+        onConfirm={handleConfirmExit}
+      />
     </SafeAreaView>
   );
 }
@@ -668,9 +1084,18 @@ const styles = StyleSheet.create({
   },
   countdownContainer: {
     ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
+  },
+  // Bloco centralizado no meio da tela (número da contagem regressiva /
+  // aviso de saída da posição), separado do HUD que fica no topo e no rodapé.
+  centerStack: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 10,
   },
   countdownText: {
     fontSize: 140,
@@ -694,9 +1119,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     marginTop: 10,
     backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.xl,
     borderColor: '#00ff88',
     borderWidth: 1,
     textAlign: 'center',
@@ -705,9 +1130,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 40,
     alignSelf: 'center',
-    paddingHorizontal: 22,
-    paddingVertical: 10,
-    borderRadius: 20,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.sm,
+    borderRadius: RADIUS.xl,
     zIndex: 35,
   },
   badgeText: { color: '#000', fontWeight: '800', fontSize: 14, letterSpacing: 1 },
@@ -721,7 +1146,7 @@ const styles = StyleSheet.create({
   summaryCard: {
     width: 290,
     backgroundColor: '#0a0d14',
-    paddingHorizontal: 24,
+    paddingHorizontal: SPACING.xxl,
     paddingVertical: 28,
     alignItems: 'center',
     position: 'relative',
@@ -763,8 +1188,8 @@ const styles = StyleSheet.create({
   exitModalButton: {
     backgroundColor: '#ff3b30',
     width: '100%',
-    paddingVertical: 12,
-    borderRadius: 6,
+    paddingVertical: SPACING.md,
+    borderRadius: RADIUS.sm,
     alignItems: 'center',
   },
   exitModalButtonText: {
@@ -804,4 +1229,5 @@ const styles = StyleSheet.create({
     borderBottomWidth: 3,
     borderRightWidth: 3,
   },
+
 });

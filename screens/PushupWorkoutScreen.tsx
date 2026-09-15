@@ -2,7 +2,7 @@
 // Tela de treino de flexões — MediaPipe Pose rodando via WebView com Design Futurista + Cronômetro e Filtros.
 
 import React, { useEffect, useState, useRef } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, Pressable, Alert, Modal } from 'react-native';
+import { StyleSheet, Text, View, SafeAreaView, Pressable, Modal } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Camera } from 'expo-camera';
 import { Accelerometer } from 'expo-sensors';
@@ -11,10 +11,14 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useProfile } from '../context/ProfileContext';
 import { RADIUS, SPACING } from '../constants/theme';
+import WorkoutTutorialModal, { useWorkoutTutorial } from '../components/WorkoutTutorialModal';
+import ExitWorkoutModal from '../components/ExitWorkoutModal';
 
 export type Stage = 'up' | 'down' | 'unknown';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Pushup'>;
+
+const PUSHUP_TUTORIAL_STORAGE_KEY = '@pushup_counter/pushup_tutorial_hidden';
 
 export default function PushupWorkoutScreen({ navigation }: Props) {
   const { addXp } = useProfile();
@@ -37,6 +41,9 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
   // Modal do Fim de Treino (Resumo)
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+
+  const tutorial = useWorkoutTutorial(PUSHUP_TUTORIAL_STORAGE_KEY);
+  const [showExitModal, setShowExitModal] = useState(false);
 
   // O treino de flexão só conta se o celular estiver apoiado na horizontal
   // (paisagem), filmando a pessoa de lado a uma certa distância — não
@@ -171,19 +178,11 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
     }
   };
 
-  const handleExitPress = () => {
-    Alert.alert('Sair do treino', 'Deseja mesmo sair do treino atual?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Sair',
-        style: 'destructive',
-        onPress: () => {
-          stopCamera();
-          setIsWorkoutActive(false);
-          setShowSummaryModal(true);
-        },
-      },
-    ]);
+  const handleConfirmExit = () => {
+    setShowExitModal(false);
+    stopCamera();
+    setIsWorkoutActive(false);
+    setShowSummaryModal(true);
   };
 
   const handleFinishAndNavigate = () => {
@@ -634,7 +633,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {hasPermission && (
+      {hasPermission && tutorial.checked && !tutorial.visible && (
         <WebView
           ref={webViewRef}
           originWhitelist={['*']}
@@ -705,7 +704,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
       {/* Botão de Sair Estilizado (Porta Vermelha) */}
       {!showSummaryModal && (
-        <Pressable style={styles.doorBackButton} onPress={handleExitPress}>
+        <Pressable style={styles.doorBackButton} onPress={() => setShowExitModal(true)}>
           <MaterialCommunityIcons name="door-open" size={26} color="#ff3b30" />
         </Pressable>
       )}
@@ -786,6 +785,21 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           </View>
         </View>
       </Modal>
+
+      <WorkoutTutorialModal
+        visible={tutorial.visible}
+        orientation="horizontal"
+        onDismiss={tutorial.dismiss}
+      />
+
+      <ExitWorkoutModal
+        visible={showExitModal}
+        reps={count}
+        repsLabel="FLEXÕES"
+        elapsedLabel={formatTime(durationSeconds)}
+        onCancel={() => setShowExitModal(false)}
+        onConfirm={handleConfirmExit}
+      />
     </SafeAreaView>
   );
 }

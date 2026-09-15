@@ -1,6 +1,6 @@
 // screens/HomeScreen.tsx
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   SafeAreaView,
   StyleSheet,
@@ -9,11 +9,20 @@ import {
   Pressable,
   Alert,
   Animated,
+  Easing,
   PanResponder,
+  Modal,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import Svg, { Circle, Defs, RadialGradient, Stop } from 'react-native-svg';
+import Svg, {
+  Circle,
+  Defs,
+  RadialGradient,
+  LinearGradient,
+  Rect,
+  Stop,
+} from 'react-native-svg';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { useProfile } from '../context/ProfileContext';
@@ -71,6 +80,215 @@ const EXERCISES: Exercise[] = [
     available: false,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Desafio Diário
+// ---------------------------------------------------------------------------
+// Só o conteúdo visual por enquanto — a lógica de progresso/validação do
+// desafio ainda não existe, então as metas e recompensas são fixas aqui.
+const DAILY_CHALLENGE = {
+  // Bíceps preenchidos = dificuldade do desafio do dia.
+  difficulty: 4,
+  difficultyMax: 4,
+  goals: [
+    { id: 'pushup', icon: 'arm-flex', reps: 10 },
+    { id: 'situp', icon: 'human', reps: 15 },
+    { id: 'squat', icon: 'weight-lifter', reps: 20 },
+  ],
+  rewards: [
+    { id: 'coins', value: 45 },
+    { id: 'gems', value: 50 },
+    { id: 'trophies', value: 10 },
+  ],
+} as const;
+
+const CHALLENGE_BORDER_RADIUS = 18;
+const CHALLENGE_TRAIL_WIDTH = 2.5;
+const CHALLENGE_GLOW_WIDTH = 7;
+const CHALLENGE_TRAIL_DURATION = 3800;
+// Fração do contorno ocupada pelo rastro (0.2 = 20% da volta).
+const CHALLENGE_TRAIL_FRACTION = 0.2;
+
+const AnimatedRect = Animated.createAnimatedComponent(Rect);
+
+// Rastro de luz correndo em volta do card (em vez de uma borda inteira
+// colorida). O traço é um retângulo arredondado com `strokeDasharray`
+// montado como [rastro, resto-da-volta]: só um pedaço do contorno fica
+// pintado, e animar `strokeDashoffset` faz esse pedaço deslizar pelo
+// caminho, dando a volta completa e recomeçando.
+//
+// Diferente do resto das animações do app, essa NÃO roda na native driver:
+// `strokeDashoffset` não é transform/opacity, então cada frame passa pela
+// thread de JS. É uma prop só, num elemento só, então na prática segura os
+// 60fps — mas é o primeiro lugar a simplificar se aparecer engasgo em
+// aparelho fraco.
+function ChallengeTrail({
+  width,
+  height,
+  progress,
+}: {
+  width: number;
+  height: number;
+  progress: Animated.Value;
+}) {
+  if (!width || !height) return null;
+
+  // O traço é centrado na linha do retângulo, então metade dele vaza pra
+  // fora. Recuar pela metade do traço mais grosso (o brilho) mantém os dois
+  // inteiros dentro do card.
+  const inset = CHALLENGE_GLOW_WIDTH / 2;
+  const rectWidth = width - CHALLENGE_GLOW_WIDTH;
+  const rectHeight = height - CHALLENGE_GLOW_WIDTH;
+  const radius = Math.max(0, CHALLENGE_BORDER_RADIUS - inset);
+
+  // Perímetro do retângulo arredondado: os quatro lados retos (já descontando
+  // os cantos) + os quatro quartos de círculo, que juntos formam um círculo
+  // completo. É o comprimento do caminho que o rastro percorre.
+  const perimeter =
+    2 * (rectWidth - 2 * radius) + 2 * (rectHeight - 2 * radius) + 2 * Math.PI * radius;
+  const trailLength = perimeter * CHALLENGE_TRAIL_FRACTION;
+
+  const dashOffset = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -perimeter],
+  });
+
+  const pathProps = {
+    x: inset,
+    y: inset,
+    width: rectWidth,
+    height: rectHeight,
+    rx: radius,
+    ry: radius,
+    fill: 'none',
+  };
+
+  const dashProps = {
+    stroke: 'url(#challengeTrail)',
+    strokeDasharray: [trailLength, perimeter - trailLength],
+    strokeDashoffset: dashOffset,
+    strokeLinecap: 'round' as const,
+  };
+
+  return (
+    <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Defs>
+        <LinearGradient id="challengeTrail" x1="0%" y1="0%" x2="100%" y2="100%">
+          <Stop offset="0%" stopColor="#ff2d20" />
+          <Stop offset="50%" stopColor="#ffa726" />
+          <Stop offset="100%" stopColor="#ffd60a" />
+        </LinearGradient>
+      </Defs>
+
+      {/* Contorno de base: discreto, só pra definir a borda do card onde o
+          rastro não está passando no momento. */}
+      <Rect {...pathProps} stroke="#24242f" strokeWidth={CHALLENGE_TRAIL_WIDTH} />
+
+      {/* Halo: mesmo rastro, mais grosso e translúcido, criando o brilho. */}
+      <AnimatedRect
+        {...pathProps}
+        {...dashProps}
+        strokeWidth={CHALLENGE_GLOW_WIDTH}
+        opacity={0.3}
+      />
+
+      {/* Rastro principal. */}
+      <AnimatedRect {...pathProps} {...dashProps} strokeWidth={CHALLENGE_TRAIL_WIDTH} />
+    </Svg>
+  );
+}
+
+function DailyChallengeCard({ onStart }: { onStart: () => void }) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const trail = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(trail, {
+        toValue: 1,
+        duration: CHALLENGE_TRAIL_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [trail]);
+
+  return (
+    <View
+      style={styles.challengeCard}
+      onLayout={(e) =>
+        setSize({
+          width: e.nativeEvent.layout.width,
+          height: e.nativeEvent.layout.height,
+        })
+      }
+    >
+      <ChallengeTrail width={size.width} height={size.height} progress={trail} />
+
+      <Text style={styles.challengeTitle}>DAILY CHALLENGE</Text>
+
+      <View style={styles.challengeBody}>
+        {/* Coluna esquerda: arte do desafio + metas de repetição */}
+        <View style={styles.challengeLeft}>
+          <View style={styles.challengeArt}>
+            <MaterialCommunityIcons name="human-male" size={96} color="#ff3b30" />
+          </View>
+
+          <View style={styles.goalList}>
+            {DAILY_CHALLENGE.goals.map((goal) => (
+              <View key={goal.id} style={styles.goalRow}>
+                <MaterialCommunityIcons
+                  name={goal.icon as keyof typeof MaterialCommunityIcons.glyphMap}
+                  size={28}
+                  color="#d6d6dc"
+                />
+                <Text style={styles.goalText}>X {goal.reps}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {/* Coluna direita: dificuldade, recompensas e botão de início */}
+        <View style={styles.challengeRight}>
+          <View style={styles.difficultyRow}>
+            {Array.from({ length: DAILY_CHALLENGE.difficultyMax }).map((_, index) => (
+              <MaterialCommunityIcons
+                key={index}
+                name="arm-flex"
+                size={26}
+                color={index < DAILY_CHALLENGE.difficulty ? '#8a8a92' : '#2a2a35'}
+              />
+            ))}
+          </View>
+
+          <Text style={styles.rewardLabel}>RECOMPENSA:</Text>
+
+          <View style={styles.rewardList}>
+            <View style={styles.rewardRow}>
+              <CoinIcon width={32} height={32} />
+              <Text style={styles.rewardText}>X {DAILY_CHALLENGE.rewards[0].value}</Text>
+            </View>
+            <View style={styles.rewardRow}>
+              <MaterialCommunityIcons name="diamond-stone" size={28} color="#2f80ff" />
+              <Text style={styles.rewardText}>X {DAILY_CHALLENGE.rewards[1].value}</Text>
+            </View>
+            <View style={styles.rewardRow}>
+              <MaterialCommunityIcons name="trophy" size={28} color="#ffd60a" />
+              <Text style={styles.rewardText}>X {DAILY_CHALLENGE.rewards[2].value}</Text>
+            </View>
+          </View>
+
+          <Pressable style={styles.startButton} onPress={onStart}>
+            <Text style={styles.startButtonText}>INICIAR</Text>
+            <MaterialCommunityIcons name="shield-half-full" size={26} color="#ffffff" />
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Ranks (elos) — plaqueta ornamentada por ícone
@@ -227,6 +445,74 @@ export default function HomeScreen({ navigation }: Props) {
 
   const [selectedId, setSelectedId] = useState<ExerciseId | null>(null);
   const navigateTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Desafio diário: `showDailyChallenge` controla a montagem do <Modal>, e os
+  // dois Animated.Value abaixo controlam a aparição. O <Modal> entra com
+  // animationType="none" porque a animação nativa dele escureceria e
+  // deslizaria tudo junto — aqui o fundo faz fade enquanto o card dá um
+  // "pop" com mola, cada um no seu tempo. Ambos usam só opacity/transform,
+  // então rodam na native driver.
+  const [showDailyChallenge, setShowDailyChallenge] = useState(false);
+  const backdropAnim = useRef(new Animated.Value(0)).current;
+  const popAnim = useRef(new Animated.Value(0)).current;
+
+  const openDailyChallenge = () => {
+    backdropAnim.setValue(0);
+    popAnim.setValue(0);
+    setShowDailyChallenge(true);
+
+    Animated.parallel([
+      Animated.timing(backdropAnim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.spring(popAnim, {
+        toValue: 1,
+        friction: 7,
+        tension: 70,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  // Desmonta o Modal só depois da animação de saída — se o estado virasse
+  // false na hora, o card sumiria de um frame pro outro.
+  const closeDailyChallenge = (onClosed?: () => void) => {
+    Animated.parallel([
+      Animated.timing(backdropAnim, {
+        toValue: 0,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+      Animated.timing(popAnim, {
+        toValue: 0,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      if (!finished) return;
+      setShowDailyChallenge(false);
+      onClosed?.();
+    });
+  };
+
+  // A mola passa um pouco de 1 antes de assentar, então a escala estoura
+  // levemente além do tamanho final — é isso que dá a sensação de "pop".
+  // A opacidade é travada em 1 pra esse overshoot não virar valor inválido.
+  const popScale = popAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.9, 1],
+  });
+  const popTranslateY = popAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [28, 0],
+  });
+  const popOpacity = popAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
 
   useFocusEffect(
     useCallback(() => {
@@ -425,7 +711,10 @@ export default function HomeScreen({ navigation }: Props) {
           <Text style={styles.navLabel}>RANKS</Text>
         </Pressable>
 
-        <Pressable style={styles.navItemCenter}>
+        <Pressable
+          style={styles.navItemCenter}
+          onPress={openDailyChallenge}
+        >
           <View style={styles.navCenterCircle}>
             <MaterialCommunityIcons
               name="sword-cross"
@@ -447,6 +736,45 @@ export default function HomeScreen({ navigation }: Props) {
           <Text style={styles.navLabel}>PERFIL</Text>
         </Pressable>
       </View>
+
+      {/* Desafio Diário — abre pelo botão vermelho central (INÍCIO).
+          O fundo escuro e o "pega-toque" que fecha ao clicar fora são duas
+          camadas absolutas separadas, e o card vem por último (logo, por
+          cima), então tocar no card não fecha o modal. */}
+      <Modal
+        visible={showDailyChallenge}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={() => closeDailyChallenge()}
+      >
+        <View style={styles.challengeRoot}>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.challengeBackdrop, { opacity: backdropAnim }]}
+          />
+
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => closeDailyChallenge()}
+          />
+
+          <Animated.View
+            style={{
+              opacity: popOpacity,
+              transform: [{ scale: popScale }, { translateY: popTranslateY }],
+            }}
+          >
+            <DailyChallengeCard
+              onStart={() =>
+                closeDailyChallenge(() =>
+                  Alert.alert('Em breve', 'O desafio diário ainda está em desenvolvimento.')
+                )
+              }
+            />
+          </Animated.View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -868,5 +1196,119 @@ const styles = StyleSheet.create({
   },
   navLabelActive: {
     color: '#ff3b30',
+  },
+
+  /* Desafio Diário */
+  challengeRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingHorizontal: 20,
+    // Distância até a base da tela. Quanto maior, mais alto o card fica —
+    // aqui ele sobe bem acima da navegação inferior, sem chegar ao centro.
+    paddingBottom: 190,
+  },
+  challengeBackdrop: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+  },
+  challengeCard: {
+    backgroundColor: '#15151f',
+    borderRadius: CHALLENGE_BORDER_RADIUS,
+    paddingHorizontal: SPACING.lg,
+    paddingTop: SPACING.xl,
+    paddingBottom: SPACING.xl,
+    overflow: 'hidden',
+  },
+  challengeTitle: {
+    color: '#ffffff',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 24,
+    lineHeight: 30,
+    letterSpacing: 2,
+    textAlign: 'center',
+    marginBottom: SPACING.xl,
+  },
+  challengeBody: {
+    flexDirection: 'row',
+    gap: SPACING.lg,
+  },
+  challengeLeft: {
+    gap: SPACING.lg,
+  },
+  challengeArt: {
+    width: 124,
+    height: 124,
+    borderRadius: RADIUS.md,
+    backgroundColor: '#20202d',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  goalList: {
+    gap: SPACING.md,
+  },
+  goalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  goalText: {
+    color: '#f4f4f6',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 16,
+    lineHeight: 20,
+    letterSpacing: 0.5,
+  },
+  challengeRight: {
+    flex: 1,
+    gap: SPACING.md,
+  },
+  difficultyRow: {
+    flexDirection: 'row',
+    gap: SPACING.xs,
+  },
+  rewardLabel: {
+    color: '#ff3b30',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 16,
+    lineHeight: 20,
+    letterSpacing: 1,
+  },
+  rewardList: {
+    gap: SPACING.sm,
+  },
+  rewardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.sm,
+  },
+  rewardText: {
+    color: '#f4f4f6',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 16,
+    lineHeight: 20,
+    letterSpacing: 0.5,
+  },
+  startButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: SPACING.sm,
+    backgroundColor: '#ff3b30',
+    borderRadius: RADIUS.xl,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    marginTop: 'auto',
+  },
+  startButtonText: {
+    color: '#ffffff',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 19,
+    lineHeight: 24,
+    letterSpacing: 1.5,
   },
 });
