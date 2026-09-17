@@ -12,7 +12,9 @@ import {
   Easing,
   PanResponder,
   Modal,
+  Image,
 } from 'react-native';
+import type { ImageSourcePropType } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import Svg, {
@@ -396,15 +398,18 @@ const PUSHUP_VARIANTS: PushupVariant[] = [
 
 type WorkoutModeId = 'practice' | 'time';
 
+// A arte de cada modo já vem com o próprio rótulo ("PRACTICE" / "60s")
+// desenhado na imagem, então o botão é só a arte ocupando o card inteiro —
+// não há Text por cima pra não duplicar o nome.
 type WorkoutMode = {
   id: WorkoutModeId;
   title: string;
-  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  art: ImageSourcePropType;
 };
 
 const WORKOUT_MODES: WorkoutMode[] = [
-  { id: 'practice', title: 'PRACTICE', icon: 'target' },
-  { id: 'time', title: '60s', icon: 'timer-outline' },
+  { id: 'practice', title: 'PRACTICE', art: require('../assets/icons/Practice-Icon.jpg') },
+  { id: 'time', title: '60s', art: require('../assets/icons/60seconds-Mode-Icon.jpg') },
 ];
 
 // Azul do grupo "Chest", o mesmo da legenda e do pontinho no card de
@@ -433,7 +438,7 @@ function VariantButton({
     >
       <MaterialCommunityIcons
         name={locked ? 'lock' : variant.icon}
-        size={locked ? 26 : 38}
+        size={locked ? 30 : 44}
         color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
       />
     </Pressable>
@@ -453,13 +458,13 @@ function ModeButton({
     <Pressable
       style={[styles.modeCard, isActive && styles.modeCardActive]}
       onPress={() => onPress(mode)}
+      accessibilityLabel={mode.title}
     >
-      <MaterialCommunityIcons
-        name={mode.icon}
-        size={32}
-        color={isActive ? '#ff3b30' : '#d6d6dc'}
+      <Image
+        source={mode.art}
+        style={[styles.modeArt, !isActive && styles.modeArtInactive]}
+        resizeMode="cover"
       />
-      <Text style={[styles.modeTitle, isActive && styles.modeTitleActive]}>{mode.title}</Text>
     </Pressable>
   );
 }
@@ -819,8 +824,18 @@ export default function HomeScreen({ navigation }: Props) {
   };
 
   const goToRanking = () => {
+    // Trava final: nenhum caminho leva ao ranking com um modal por cima.
+    if (modalOpenRef.current) return;
     navigation.navigate('Ranking');
   };
+
+  // Enquanto um modal está aberto o deslize da Home não vale: arrastar pro
+  // lado dentro do seletor de push-up (na rolagem de variações, por exemplo)
+  // abria o ranking por baixo do card. O PanResponder é criado uma vez só,
+  // então a visibilidade vai por ref — ler o estado direto congelaria o valor
+  // da primeira renderização dentro do closure.
+  const modalOpenRef = useRef(false);
+  modalOpenRef.current = dailyChallenge.visible || exercisePicker.visible;
 
   // Detector do gesto de Swipe (deslize) para a direita — usa o
   // PanResponder nativo do React Native, sem depender de
@@ -828,9 +843,13 @@ export default function HomeScreen({ navigation }: Props) {
   // causava o erro "Unable to resolve module react-native-gesture-handler").
   const panResponder = useRef(
     PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_evt, gestureState) =>
-        Math.abs(gestureState.dx) > 20 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5,
+        !modalOpenRef.current &&
+        Math.abs(gestureState.dx) > 20 &&
+        Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5,
       onPanResponderRelease: (_evt, gestureState) => {
+        if (modalOpenRef.current) return;
         if (gestureState.dx > 50) {
           goToRanking();
         }
@@ -1632,7 +1651,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
     paddingHorizontal: 20,
-    paddingBottom: 190,
+    paddingBottom: 140,
   },
   pickerCard: {
     backgroundColor: '#15151f',
@@ -1656,8 +1675,8 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
   },
   variantCard: {
-    width: 84,
-    height: 84,
+    width: 104,
+    height: 104,
     borderRadius: RADIUS.lg,
     backgroundColor: '#20202d',
     borderWidth: 1.5,
@@ -1685,39 +1704,44 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#8a8a92',
   },
+  // A linha de ação ganha altura própria: antes ela media o mesmo que os
+  // cards de modo (84), e as três pills tinham que dividir isso em fatias de
+  // ~24. Com a altura solta os botões crescem sem empurrar os cards de modo
+  // pros lados — a largura ali é disputada com a coluna de pills.
   actionRow: {
     flexDirection: 'row',
-    alignItems: 'stretch',
+    alignItems: 'center',
+    height: 132,
     gap: SPACING.sm,
   },
   modeCard: {
-    width: 84,
-    height: 84,
+    width: 92,
+    height: 92,
     backgroundColor: '#20202d',
     borderWidth: 1.5,
     borderColor: '#171722',
     borderRadius: RADIUS.lg,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 6,
+    // A arte vai até a borda, então o card precisa recortar o que passa do
+    // raio — sem isso os cantos da imagem aparecem quadrados por cima.
+    overflow: 'hidden',
+  },
+  modeArt: {
+    width: '100%',
+    height: '100%',
+  },
+  // Modo não escolhido fica apagado: a diferença de brilho é o que separa os
+  // dois, já que as duas artes têm cor forte própria.
+  modeArtInactive: {
+    opacity: 0.5,
   },
   modeCardActive: {
     borderColor: '#ff3b30',
     backgroundColor: '#25181a',
   },
-  modeTitle: {
-    color: '#f4f4f6',
-    fontFamily: 'Yearbook Solid',
-    fontSize: 14,
-    lineHeight: 18,
-    letterSpacing: 0.5,
-  },
-  modeTitleActive: {
-    color: '#ff6b61',
-  },
   pillColumn: {
     flex: 1,
-    gap: 6,
+    alignSelf: 'stretch',
+    gap: SPACING.sm,
   },
   pill: {
     flex: 1,
@@ -1734,8 +1758,8 @@ const styles = StyleSheet.create({
   pillText: {
     color: '#ffffff',
     fontFamily: 'Yearbook Solid',
-    fontSize: 15,
-    lineHeight: 19,
+    fontSize: 16,
+    lineHeight: 20,
     letterSpacing: 1,
   },
 });
