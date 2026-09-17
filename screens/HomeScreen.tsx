@@ -12,7 +12,6 @@ import {
   Easing,
   PanResponder,
   Modal,
-  ScrollView,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -131,11 +130,15 @@ function GradientTrail({
   height,
   progress,
   gradientId = 'gradientTrail',
+  colors = ['#ff2d20', '#ffa726', '#ffd60a'],
 }: {
   width: number;
   height: number;
   progress: Animated.Value;
   gradientId?: string;
+  // Início/meio/fim do degradê — por padrão o vermelho-laranja-amarelo do
+  // Desafio Diário. O seletor de exercício passa a cor do grupo muscular.
+  colors?: readonly [string, string, string];
 }) {
   if (!width || !height) return null;
 
@@ -180,9 +183,9 @@ function GradientTrail({
     <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
       <Defs>
         <LinearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-          <Stop offset="0%" stopColor="#ff2d20" />
-          <Stop offset="50%" stopColor="#ffa726" />
-          <Stop offset="100%" stopColor="#ffd60a" />
+          <Stop offset="0%" stopColor={colors[0]} />
+          <Stop offset="50%" stopColor={colors[1]} />
+          <Stop offset="100%" stopColor={colors[2]} />
         </LinearGradient>
       </Defs>
 
@@ -396,14 +399,17 @@ type WorkoutModeId = 'practice' | 'time';
 type WorkoutMode = {
   id: WorkoutModeId;
   title: string;
-  subtitle: string;
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
 };
 
 const WORKOUT_MODES: WorkoutMode[] = [
-  { id: 'practice', title: 'PRACTICE', subtitle: 'Sem limite de tempo', icon: 'target' },
-  { id: 'time', title: 'TIME', subtitle: '60s pro seu recorde', icon: 'timer-outline' },
+  { id: 'practice', title: 'PRACTICE', icon: 'target' },
+  { id: 'time', title: '60s', icon: 'timer-outline' },
 ];
+
+// Azul do grupo "Chest", o mesmo da legenda e do pontinho no card de
+// push-up — é o que tinge o rastro em volta do seletor.
+const CHEST_TRAIL_COLORS = ['#1b4fd8', '#2f80ff', '#7ecbff'] as const;
 
 function VariantButton({
   variant,
@@ -416,30 +422,20 @@ function VariantButton({
 }) {
   const locked = !variant.available;
   return (
-    <Pressable style={styles.variantSlot} onPress={() => onPress(variant)}>
-      <View
-        style={[
-          styles.variantCard,
-          isActive && styles.variantCardActive,
-          locked && styles.variantCardLocked,
-        ]}
-      >
-        <MaterialCommunityIcons
-          name={locked ? 'lock' : variant.icon}
-          size={locked ? 20 : 26}
-          color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
-        />
-      </View>
-      <Text
-        style={[
-          styles.variantLabel,
-          isActive && styles.variantLabelActive,
-          locked && styles.variantLabelLocked,
-        ]}
-        numberOfLines={1}
-      >
-        {variant.title}
-      </Text>
+    <Pressable
+      style={[
+        styles.variantCard,
+        isActive && styles.variantCardActive,
+        locked && styles.variantCardLocked,
+      ]}
+      onPress={() => onPress(variant)}
+      accessibilityLabel={variant.title}
+    >
+      <MaterialCommunityIcons
+        name={locked ? 'lock' : variant.icon}
+        size={locked ? 26 : 38}
+        color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
+      />
     </Pressable>
   );
 }
@@ -460,11 +456,10 @@ function ModeButton({
     >
       <MaterialCommunityIcons
         name={mode.icon}
-        size={24}
+        size={32}
         color={isActive ? '#ff3b30' : '#d6d6dc'}
       />
       <Text style={[styles.modeTitle, isActive && styles.modeTitleActive]}>{mode.title}</Text>
-      <Text style={styles.modeSubtitle}>{mode.subtitle}</Text>
     </Pressable>
   );
 }
@@ -483,7 +478,10 @@ function ExercisePickerCard({
   onStart: () => void;
 }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
+  const [scrollVisible, setScrollVisible] = useState(0);
+  const [scrollContent, setScrollContent] = useState(0);
   const trail = useRef(new Animated.Value(0)).current;
+  const scrollX = useRef(new Animated.Value(0)).current;
   const canStart = !!selectedVariant && !!selectedMode;
 
   useEffect(() => {
@@ -498,6 +496,22 @@ function ExercisePickerCard({
     loop.start();
     return () => loop.stop();
   }, [trail]);
+
+  // Barra de rolagem desenhada à mão: a nativa aparece e some sozinha, e
+  // aqui ela faz parte do desenho — é o que avisa que existem mais
+  // variações fora da tela. O polegar ocupa a mesma fração da trilha que a
+  // área visível ocupa do conteúdo, então ele encolhe conforme entram
+  // novos exercícios.
+  const visibleRatio = scrollContent > 0 ? Math.min(1, scrollVisible / scrollContent) : 1;
+  const thumbWidth = Math.max(24, scrollVisible * visibleRatio);
+  const thumbX = scrollX.interpolate({
+    inputRange: [0, Math.max(1, scrollContent - scrollVisible)],
+    outputRange: [0, Math.max(0, scrollVisible - thumbWidth)],
+    extrapolate: 'clamp',
+  });
+
+  const notAvailableYet = () =>
+    Alert.alert('Em breve', 'Esse modo ainda está em desenvolvimento.');
 
   return (
     <View
@@ -514,18 +528,27 @@ function ExercisePickerCard({
         height={size.height}
         progress={trail}
         gradientId="pickerTrail"
+        colors={CHEST_TRAIL_COLORS}
       />
 
       <Text style={styles.pickerTitle}>PUSH-UPS</Text>
-      <Text style={styles.pickerSubtitle}>Escolha a variação</Text>
 
       {/* Rolagem lateral: só 3 variações hoje, mas o espaço já é pensado
           pras próximas que forem entrando. */}
-      <ScrollView
+      <Animated.ScrollView
         horizontal
-        showsHorizontalScrollIndicator
+        showsHorizontalScrollIndicator={false}
         style={styles.variantScroll}
         contentContainerStyle={styles.variantScrollContent}
+        // A medida é lida direto do evento, fora de um updater de estado:
+        // o React recicla o evento sintético antes de rodar o updater, e lá
+        // dentro `nativeEvent` já chega nulo.
+        onLayout={(e) => setScrollVisible(e.nativeEvent.layout.width)}
+        onContentSizeChange={(width) => setScrollContent(width)}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
+          useNativeDriver: true,
+        })}
+        scrollEventThrottle={16}
       >
         {PUSHUP_VARIANTS.map((variant) => (
           <VariantButton
@@ -535,11 +558,18 @@ function ExercisePickerCard({
             onPress={onSelectVariant}
           />
         ))}
-      </ScrollView>
+      </Animated.ScrollView>
 
-      <Text style={[styles.pickerSubtitle, styles.pickerModeSubtitle]}>Escolha o modo</Text>
+      <View style={styles.scrollTrack}>
+        <Animated.View
+          style={[
+            styles.scrollThumb,
+            { width: thumbWidth, transform: [{ translateX: thumbX }] },
+          ]}
+        />
+      </View>
 
-      <View style={styles.modeRow}>
+      <View style={styles.actionRow}>
         {WORKOUT_MODES.map((mode) => (
           <ModeButton
             key={mode.id}
@@ -548,16 +578,24 @@ function ExercisePickerCard({
             onPress={onSelectMode}
           />
         ))}
-      </View>
 
-      <Pressable
-        style={[styles.startButton, !canStart && styles.startButtonDisabled]}
-        onPress={onStart}
-        disabled={!canStart}
-      >
-        <Text style={styles.startButtonText}>INICIAR</Text>
-        <MaterialCommunityIcons name="play" size={26} color="#ffffff" />
-      </Pressable>
+        <View style={styles.pillColumn}>
+          <Pressable style={styles.pill} onPress={notAvailableYet}>
+            <Text style={styles.pillText}>1 V 1</Text>
+          </Pressable>
+          <Pressable style={styles.pill} onPress={notAvailableYet}>
+            <Text style={styles.pillText}>2 V 2</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.pill, !canStart && styles.pillDisabled]}
+            onPress={onStart}
+            disabled={!canStart}
+          >
+            <Text style={styles.pillText}>INICIAR</Text>
+            <MaterialCommunityIcons name="shield-half-full" size={16} color="#ffffff" />
+          </Pressable>
+        </View>
+      </View>
     </View>
   );
 }
@@ -1588,10 +1626,6 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     letterSpacing: 1.5,
   },
-  startButtonDisabled: {
-    backgroundColor: '#2a2a35',
-    opacity: 0.6,
-  },
 
   /* Seletor de variação/modo de push-up */
   pickerRoot: {
@@ -1613,34 +1647,17 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     letterSpacing: 2,
     textAlign: 'center',
-  },
-  pickerSubtitle: {
-    color: '#8a8a92',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-    marginTop: SPACING.md,
-    marginBottom: SPACING.sm,
-  },
-  pickerModeSubtitle: {
-    marginTop: SPACING.lg,
+    marginBottom: SPACING.md,
   },
   variantScroll: {
     flexGrow: 0,
   },
   variantScrollContent: {
-    gap: SPACING.md,
-    paddingBottom: SPACING.sm,
-    paddingRight: SPACING.sm,
-  },
-  variantSlot: {
-    alignItems: 'center',
-    width: 74,
+    gap: SPACING.sm,
   },
   variantCard: {
-    width: 64,
-    height: 64,
+    width: 84,
+    height: 84,
     borderRadius: RADIUS.lg,
     backgroundColor: '#20202d',
     borderWidth: 1.5,
@@ -1655,33 +1672,34 @@ const styles = StyleSheet.create({
   variantCardLocked: {
     opacity: 0.55,
   },
-  variantLabel: {
-    color: '#d6d6dc',
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.3,
-    textAlign: 'center',
-    marginTop: 6,
+  scrollTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#20202d',
+    marginTop: SPACING.sm,
+    marginBottom: SPACING.md,
+    overflow: 'hidden',
   },
-  variantLabelActive: {
-    color: '#ff6b61',
+  scrollThumb: {
+    height: '100%',
+    borderRadius: 4,
+    backgroundColor: '#8a8a92',
   },
-  variantLabelLocked: {
-    color: '#6b6b73',
-  },
-  modeRow: {
+  actionRow: {
     flexDirection: 'row',
-    gap: SPACING.md,
+    alignItems: 'stretch',
+    gap: SPACING.sm,
   },
   modeCard: {
-    flex: 1,
+    width: 84,
+    height: 84,
     backgroundColor: '#20202d',
     borderWidth: 1.5,
     borderColor: '#171722',
     borderRadius: RADIUS.lg,
-    paddingVertical: SPACING.md,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
   },
   modeCardActive: {
     borderColor: '#ff3b30',
@@ -1689,18 +1707,35 @@ const styles = StyleSheet.create({
   },
   modeTitle: {
     color: '#f4f4f6',
-    fontSize: 13,
-    fontWeight: '800',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 14,
+    lineHeight: 18,
     letterSpacing: 0.5,
-    marginTop: 4,
   },
   modeTitleActive: {
     color: '#ff6b61',
   },
-  modeSubtitle: {
-    color: '#6b6b73',
-    fontSize: 10,
-    fontWeight: '600',
-    textAlign: 'center',
+  pillColumn: {
+    flex: 1,
+    gap: 6,
+  },
+  pill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#ff3b30',
+    borderRadius: RADIUS.xl,
+  },
+  pillDisabled: {
+    backgroundColor: '#2a2a35',
+  },
+  pillText: {
+    color: '#ffffff',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 15,
+    lineHeight: 19,
+    letterSpacing: 1,
   },
 });
