@@ -12,6 +12,7 @@ import {
   Easing,
   PanResponder,
   Modal,
+  ScrollView,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -122,14 +123,19 @@ const AnimatedRect = Animated.createAnimatedComponent(Rect);
 // thread de JS. É uma prop só, num elemento só, então na prática segura os
 // 60fps — mas é o primeiro lugar a simplificar se aparecer engasgo em
 // aparelho fraco.
-function ChallengeTrail({
+//
+// Reaproveitado por qualquer card que precise do mesmo efeito de borda
+// giratória (Desafio Diário, seleção de variação de exercício etc).
+function GradientTrail({
   width,
   height,
   progress,
+  gradientId = 'gradientTrail',
 }: {
   width: number;
   height: number;
   progress: Animated.Value;
+  gradientId?: string;
 }) {
   if (!width || !height) return null;
 
@@ -164,7 +170,7 @@ function ChallengeTrail({
   };
 
   const dashProps = {
-    stroke: 'url(#challengeTrail)',
+    stroke: `url(#${gradientId})`,
     strokeDasharray: [trailLength, perimeter - trailLength],
     strokeDashoffset: dashOffset,
     strokeLinecap: 'round' as const,
@@ -173,7 +179,7 @@ function ChallengeTrail({
   return (
     <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
       <Defs>
-        <LinearGradient id="challengeTrail" x1="0%" y1="0%" x2="100%" y2="100%">
+        <LinearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
           <Stop offset="0%" stopColor="#ff2d20" />
           <Stop offset="50%" stopColor="#ffa726" />
           <Stop offset="100%" stopColor="#ffd60a" />
@@ -196,6 +202,75 @@ function ChallengeTrail({
       <AnimatedRect {...pathProps} {...dashProps} strokeWidth={CHALLENGE_TRAIL_WIDTH} />
     </Svg>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Modal com "pop": fundo escurece com fade e o card entra com uma mola,
+// saindo do mesmo jeito ao fechar. Compartilhado pelo Desafio Diário e pelo
+// seletor de variação/modo de exercício — os dois abrem/fecham do mesmo
+// jeito, só o conteúdo interno muda.
+// ---------------------------------------------------------------------------
+function usePopModal() {
+  const [visible, setVisible] = useState(false);
+  const backdropAnim = useRef(new Animated.Value(0)).current;
+  const popAnim = useRef(new Animated.Value(0)).current;
+
+  const open = useCallback(() => {
+    backdropAnim.setValue(0);
+    popAnim.setValue(0);
+    setVisible(true);
+
+    Animated.parallel([
+      Animated.timing(backdropAnim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.spring(popAnim, {
+        toValue: 1,
+        friction: 7,
+        tension: 70,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [backdropAnim, popAnim]);
+
+  // Só desmonta o conteúdo depois da animação de saída — se o estado virasse
+  // false na hora, o card sumiria de um frame pro outro.
+  const close = useCallback(
+    (onClosed?: () => void) => {
+      Animated.parallel([
+        Animated.timing(backdropAnim, {
+          toValue: 0,
+          duration: 140,
+          useNativeDriver: true,
+        }),
+        Animated.timing(popAnim, {
+          toValue: 0,
+          duration: 140,
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        if (!finished) return;
+        setVisible(false);
+        onClosed?.();
+      });
+    },
+    [backdropAnim, popAnim]
+  );
+
+  // A mola passa um pouco de 1 antes de assentar, então a escala estoura
+  // levemente além do tamanho final — é isso que dá a sensação de "pop".
+  // A opacidade é travada em 1 pra esse overshoot não virar valor inválido.
+  const scale = popAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] });
+  const translateY = popAnim.interpolate({ inputRange: [0, 1], outputRange: [28, 0] });
+  const opacity = popAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  return { visible, backdropAnim, open, close, scale, translateY, opacity };
 }
 
 function DailyChallengeCard({ onStart }: { onStart: () => void }) {
@@ -225,7 +300,12 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
         })
       }
     >
-      <ChallengeTrail width={size.width} height={size.height} progress={trail} />
+      <GradientTrail
+        width={size.width}
+        height={size.height}
+        progress={trail}
+        gradientId="dailyChallengeTrail"
+      />
 
       <Text style={styles.challengeTitle}>DAILY CHALLENGE</Text>
 
@@ -286,6 +366,198 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
           </Pressable>
         </View>
       </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Seletor de variação + modo de exercício
+// ---------------------------------------------------------------------------
+// Aberto ao tocar num card de exercício com variações (por enquanto só
+// push-up). Só a variação "default" tem exercício implementado — as outras
+// existem apenas como interface, esperando os próximos treinos.
+type PushupVariantId = 'default' | 'pike' | 'handstand';
+
+type PushupVariant = {
+  id: PushupVariantId;
+  title: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  available: boolean;
+};
+
+const PUSHUP_VARIANTS: PushupVariant[] = [
+  { id: 'default', title: 'DEFAULT', icon: 'arm-flex', available: true },
+  { id: 'pike', title: 'PIKE', icon: 'triangle-outline', available: false },
+  { id: 'handstand', title: 'HANDSTAND', icon: 'yoga', available: false },
+];
+
+type WorkoutModeId = 'practice' | 'time';
+
+type WorkoutMode = {
+  id: WorkoutModeId;
+  title: string;
+  subtitle: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+};
+
+const WORKOUT_MODES: WorkoutMode[] = [
+  { id: 'practice', title: 'PRACTICE', subtitle: 'Sem limite de tempo', icon: 'target' },
+  { id: 'time', title: 'TIME', subtitle: '60s pro seu recorde', icon: 'timer-outline' },
+];
+
+function VariantButton({
+  variant,
+  isActive,
+  onPress,
+}: {
+  variant: PushupVariant;
+  isActive: boolean;
+  onPress: (variant: PushupVariant) => void;
+}) {
+  const locked = !variant.available;
+  return (
+    <Pressable style={styles.variantSlot} onPress={() => onPress(variant)}>
+      <View
+        style={[
+          styles.variantCard,
+          isActive && styles.variantCardActive,
+          locked && styles.variantCardLocked,
+        ]}
+      >
+        <MaterialCommunityIcons
+          name={locked ? 'lock' : variant.icon}
+          size={locked ? 20 : 26}
+          color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
+        />
+      </View>
+      <Text
+        style={[
+          styles.variantLabel,
+          isActive && styles.variantLabelActive,
+          locked && styles.variantLabelLocked,
+        ]}
+        numberOfLines={1}
+      >
+        {variant.title}
+      </Text>
+    </Pressable>
+  );
+}
+
+function ModeButton({
+  mode,
+  isActive,
+  onPress,
+}: {
+  mode: WorkoutMode;
+  isActive: boolean;
+  onPress: (mode: WorkoutMode) => void;
+}) {
+  return (
+    <Pressable
+      style={[styles.modeCard, isActive && styles.modeCardActive]}
+      onPress={() => onPress(mode)}
+    >
+      <MaterialCommunityIcons
+        name={mode.icon}
+        size={24}
+        color={isActive ? '#ff3b30' : '#d6d6dc'}
+      />
+      <Text style={[styles.modeTitle, isActive && styles.modeTitleActive]}>{mode.title}</Text>
+      <Text style={styles.modeSubtitle}>{mode.subtitle}</Text>
+    </Pressable>
+  );
+}
+
+function ExercisePickerCard({
+  selectedVariant,
+  selectedMode,
+  onSelectVariant,
+  onSelectMode,
+  onStart,
+}: {
+  selectedVariant: PushupVariantId | null;
+  selectedMode: WorkoutModeId | null;
+  onSelectVariant: (variant: PushupVariant) => void;
+  onSelectMode: (mode: WorkoutMode) => void;
+  onStart: () => void;
+}) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const trail = useRef(new Animated.Value(0)).current;
+  const canStart = !!selectedVariant && !!selectedMode;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(trail, {
+        toValue: 1,
+        duration: CHALLENGE_TRAIL_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [trail]);
+
+  return (
+    <View
+      style={styles.pickerCard}
+      onLayout={(e) =>
+        setSize({
+          width: e.nativeEvent.layout.width,
+          height: e.nativeEvent.layout.height,
+        })
+      }
+    >
+      <GradientTrail
+        width={size.width}
+        height={size.height}
+        progress={trail}
+        gradientId="pickerTrail"
+      />
+
+      <Text style={styles.pickerTitle}>PUSH-UPS</Text>
+      <Text style={styles.pickerSubtitle}>Escolha a variação</Text>
+
+      {/* Rolagem lateral: só 3 variações hoje, mas o espaço já é pensado
+          pras próximas que forem entrando. */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator
+        style={styles.variantScroll}
+        contentContainerStyle={styles.variantScrollContent}
+      >
+        {PUSHUP_VARIANTS.map((variant) => (
+          <VariantButton
+            key={variant.id}
+            variant={variant}
+            isActive={selectedVariant === variant.id}
+            onPress={onSelectVariant}
+          />
+        ))}
+      </ScrollView>
+
+      <Text style={[styles.pickerSubtitle, styles.pickerModeSubtitle]}>Escolha o modo</Text>
+
+      <View style={styles.modeRow}>
+        {WORKOUT_MODES.map((mode) => (
+          <ModeButton
+            key={mode.id}
+            mode={mode}
+            isActive={selectedMode === mode.id}
+            onPress={onSelectMode}
+          />
+        ))}
+      </View>
+
+      <Pressable
+        style={[styles.startButton, !canStart && styles.startButtonDisabled]}
+        onPress={onStart}
+        disabled={!canStart}
+      >
+        <Text style={styles.startButtonText}>INICIAR</Text>
+        <MaterialCommunityIcons name="play" size={26} color="#ffffff" />
+      </Pressable>
     </View>
   );
 }
@@ -446,73 +718,30 @@ export default function HomeScreen({ navigation }: Props) {
   const [selectedId, setSelectedId] = useState<ExerciseId | null>(null);
   const navigateTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Desafio diário: `showDailyChallenge` controla a montagem do <Modal>, e os
-  // dois Animated.Value abaixo controlam a aparição. O <Modal> entra com
-  // animationType="none" porque a animação nativa dele escureceria e
-  // deslizaria tudo junto — aqui o fundo faz fade enquanto o card dá um
-  // "pop" com mola, cada um no seu tempo. Ambos usam só opacity/transform,
-  // então rodam na native driver.
-  const [showDailyChallenge, setShowDailyChallenge] = useState(false);
-  const backdropAnim = useRef(new Animated.Value(0)).current;
-  const popAnim = useRef(new Animated.Value(0)).current;
+  const dailyChallenge = usePopModal();
+  const exercisePicker = usePopModal();
+  const [pushupVariant, setPushupVariant] = useState<PushupVariantId | null>(null);
+  const [workoutMode, setWorkoutMode] = useState<WorkoutModeId | null>(null);
 
-  const openDailyChallenge = () => {
-    backdropAnim.setValue(0);
-    popAnim.setValue(0);
-    setShowDailyChallenge(true);
-
-    Animated.parallel([
-      Animated.timing(backdropAnim, {
-        toValue: 1,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-      Animated.spring(popAnim, {
-        toValue: 1,
-        friction: 7,
-        tension: 70,
-        useNativeDriver: true,
-      }),
-    ]).start();
+  const openExercisePicker = () => {
+    setPushupVariant(null);
+    setWorkoutMode(null);
+    exercisePicker.open();
   };
 
-  // Desmonta o Modal só depois da animação de saída — se o estado virasse
-  // false na hora, o card sumiria de um frame pro outro.
-  const closeDailyChallenge = (onClosed?: () => void) => {
-    Animated.parallel([
-      Animated.timing(backdropAnim, {
-        toValue: 0,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-      Animated.timing(popAnim, {
-        toValue: 0,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
-      if (!finished) return;
-      setShowDailyChallenge(false);
-      onClosed?.();
+  const handleStartWorkout = () => {
+    if (!pushupVariant || !workoutMode) return;
+
+    exercisePicker.close(() => {
+      // Só a variação "default" no modo "practice" tem exercício
+      // implementado até aqui — o resto ainda é só interface.
+      if (pushupVariant === 'default' && workoutMode === 'practice') {
+        navigation.navigate('Pushup');
+      } else {
+        Alert.alert('Em breve', 'Esse modo ainda está em desenvolvimento.');
+      }
     });
   };
-
-  // A mola passa um pouco de 1 antes de assentar, então a escala estoura
-  // levemente além do tamanho final — é isso que dá a sensação de "pop".
-  // A opacidade é travada em 1 pra esse overshoot não virar valor inválido.
-  const popScale = popAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.9, 1],
-  });
-  const popTranslateY = popAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [28, 0],
-  });
-  const popOpacity = popAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-    extrapolate: 'clamp',
-  });
 
   useFocusEffect(
     useCallback(() => {
@@ -533,7 +762,7 @@ export default function HomeScreen({ navigation }: Props) {
 
     navigateTimeout.current = setTimeout(() => {
       if (exercise.id === 'pushup') {
-        navigation.navigate('Pushup');
+        openExercisePicker();
       } else if (exercise.id === 'situp') {
         navigation.navigate('Situp');
       } else if (exercise.id === 'squat') {
@@ -713,7 +942,7 @@ export default function HomeScreen({ navigation }: Props) {
 
         <Pressable
           style={styles.navItemCenter}
-          onPress={openDailyChallenge}
+          onPress={dailyChallenge.open}
         >
           <View style={styles.navCenterCircle}>
             <MaterialCommunityIcons
@@ -742,35 +971,83 @@ export default function HomeScreen({ navigation }: Props) {
           camadas absolutas separadas, e o card vem por último (logo, por
           cima), então tocar no card não fecha o modal. */}
       <Modal
-        visible={showDailyChallenge}
+        visible={dailyChallenge.visible}
         transparent
         animationType="none"
         statusBarTranslucent
-        onRequestClose={() => closeDailyChallenge()}
+        onRequestClose={() => dailyChallenge.close()}
       >
         <View style={styles.challengeRoot}>
           <Animated.View
             pointerEvents="none"
-            style={[styles.challengeBackdrop, { opacity: backdropAnim }]}
+            style={[styles.challengeBackdrop, { opacity: dailyChallenge.backdropAnim }]}
           />
 
           <Pressable
             style={StyleSheet.absoluteFill}
-            onPress={() => closeDailyChallenge()}
+            onPress={() => dailyChallenge.close()}
           />
 
           <Animated.View
             style={{
-              opacity: popOpacity,
-              transform: [{ scale: popScale }, { translateY: popTranslateY }],
+              opacity: dailyChallenge.opacity,
+              transform: [
+                { scale: dailyChallenge.scale },
+                { translateY: dailyChallenge.translateY },
+              ],
             }}
           >
             <DailyChallengeCard
               onStart={() =>
-                closeDailyChallenge(() =>
+                dailyChallenge.close(() =>
                   Alert.alert('Em breve', 'O desafio diário ainda está em desenvolvimento.')
                 )
               }
+            />
+          </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Seletor de variação/modo de push-up — abre ao tocar no card de
+          push-up na grade de exercícios. Mesmo padrão do Desafio Diário:
+          fundo com fade + card com "pop". */}
+      <Modal
+        visible={exercisePicker.visible}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={() => exercisePicker.close()}
+      >
+        <View style={styles.pickerRoot}>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.challengeBackdrop, { opacity: exercisePicker.backdropAnim }]}
+          />
+
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => exercisePicker.close()}
+          />
+
+          <Animated.View
+            style={{
+              opacity: exercisePicker.opacity,
+              transform: [
+                { scale: exercisePicker.scale },
+                { translateY: exercisePicker.translateY },
+              ],
+            }}
+          >
+            <ExercisePickerCard
+              selectedVariant={pushupVariant}
+              selectedMode={workoutMode}
+              onSelectVariant={(variant) =>
+                variant.available
+                  ? setPushupVariant(variant.id)
+                  : Alert.alert('Em breve', 'Essa variação ainda está em desenvolvimento.')
+              }
+              onSelectMode={(mode) => setWorkoutMode(mode.id)}
+              onStart={handleStartWorkout}
             />
           </Animated.View>
         </View>
@@ -1310,5 +1587,120 @@ const styles = StyleSheet.create({
     fontSize: 19,
     lineHeight: 24,
     letterSpacing: 1.5,
+  },
+  startButtonDisabled: {
+    backgroundColor: '#2a2a35',
+    opacity: 0.6,
+  },
+
+  /* Seletor de variação/modo de push-up */
+  pickerRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingHorizontal: 20,
+    paddingBottom: 190,
+  },
+  pickerCard: {
+    backgroundColor: '#15151f',
+    borderRadius: CHALLENGE_BORDER_RADIUS,
+    padding: SPACING.lg,
+    overflow: 'hidden',
+  },
+  pickerTitle: {
+    color: '#ffffff',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 22,
+    lineHeight: 28,
+    letterSpacing: 2,
+    textAlign: 'center',
+  },
+  pickerSubtitle: {
+    color: '#8a8a92',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginTop: SPACING.md,
+    marginBottom: SPACING.sm,
+  },
+  pickerModeSubtitle: {
+    marginTop: SPACING.lg,
+  },
+  variantScroll: {
+    flexGrow: 0,
+  },
+  variantScrollContent: {
+    gap: SPACING.md,
+    paddingBottom: SPACING.sm,
+    paddingRight: SPACING.sm,
+  },
+  variantSlot: {
+    alignItems: 'center',
+    width: 74,
+  },
+  variantCard: {
+    width: 64,
+    height: 64,
+    borderRadius: RADIUS.lg,
+    backgroundColor: '#20202d',
+    borderWidth: 1.5,
+    borderColor: '#171722',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  variantCardActive: {
+    borderColor: '#ff3b30',
+    backgroundColor: '#25181a',
+  },
+  variantCardLocked: {
+    opacity: 0.55,
+  },
+  variantLabel: {
+    color: '#d6d6dc',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  variantLabelActive: {
+    color: '#ff6b61',
+  },
+  variantLabelLocked: {
+    color: '#6b6b73',
+  },
+  modeRow: {
+    flexDirection: 'row',
+    gap: SPACING.md,
+  },
+  modeCard: {
+    flex: 1,
+    backgroundColor: '#20202d',
+    borderWidth: 1.5,
+    borderColor: '#171722',
+    borderRadius: RADIUS.lg,
+    paddingVertical: SPACING.md,
+    alignItems: 'center',
+    gap: 4,
+  },
+  modeCardActive: {
+    borderColor: '#ff3b30',
+    backgroundColor: '#25181a',
+  },
+  modeTitle: {
+    color: '#f4f4f6',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginTop: 4,
+  },
+  modeTitleActive: {
+    color: '#ff6b61',
+  },
+  modeSubtitle: {
+    color: '#6b6b73',
+    fontSize: 10,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
