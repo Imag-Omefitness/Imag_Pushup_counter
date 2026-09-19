@@ -33,7 +33,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
   // Controle de Tempo Decorrido (em segundos)
   const [durationSeconds, setDurationSeconds] = useState(0);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Estados para o cancelamento/finalização por saída de prancha
   const [exitCountdown, setExitCountdown] = useState<number | null>(null);
@@ -166,6 +166,9 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
       } else if (data.type === 'PLANK_LOST_TICK') {
         setIsPlankLost(true);
         setExitCountdown(data.value);
+      } else if (data.type === 'PLANK_RESTORED') {
+        setIsPlankLost(false);
+        setExitCountdown(null);
       } else if (data.type === 'WORKOUT_FINISHED') {
         // Quando o timer zera ("STOP"), encerra o treino e abre o modal de resumo
         stopCamera();
@@ -271,7 +274,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           if (!orientationOk && wasOk !== orientationOk) {
             resetCountdown();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            sendToRN('STATUS', { message: 'Apoie o celular na horizontal, de lado, para começar' });
+            sendStatus('Apoie o celular na horizontal, de lado, para começar');
           }
         };
 
@@ -279,6 +282,25 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(JSON.stringify({ type, ...payload }));
           }
+        }
+
+        // Os avisos de forma sao avaliados a cada frame; sem esse filtro
+        // seriam dezenas de postMessage por segundo repetindo o MESMO texto,
+        // e cada um vira um setFeedback -> re-render inteiro da tela no lado
+        // React Native. Mesmo filtro que o agachamento ja usava.
+        let lastStatusMessage = null;
+
+        function sendStatus(message) {
+          if (message === lastStatusMessage) return;
+          lastStatusMessage = message;
+          sendToRN('STATUS', { message });
+        }
+
+        // Qualquer outra mensagem (UPDATE, COUNTDOWN...) reescreve o texto de
+        // feedback na RN, entao o filtro acima precisa esquecer o ultimo
+        // status pra ele poder reaparecer.
+        function invalidateStatus() {
+          lastStatusMessage = null;
         }
 
         function calculateAngle(A, B, C) {
@@ -340,9 +362,28 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           return raw / torsoScale;
         }
 
+        // Reatribuir canvas.width/height realoca o buffer inteiro e zera todo
+        // o estado do contexto — e faz isso mesmo quando o valor nao mudou.
+        // Como isso rodava dentro do drawSkeleton, eram ~1,2MB realocados a
+        // cada frame (~30x/s) so pra desenhar o esqueleto. Agora o tamanho so
+        // e escrito quando o video realmente muda de resolucao; a limpeza por
+        // frame continua sendo feita pelo clearRect, como antes.
+        let canvasW = 0;
+        let canvasH = 0;
+
+        function syncCanvasSize() {
+          const w = videoElement.videoWidth || 640;
+          const h = videoElement.videoHeight || 480;
+          if (w !== canvasW || h !== canvasH) {
+            canvasElement.width = w;
+            canvasElement.height = h;
+            canvasW = w;
+            canvasH = h;
+          }
+        }
+
         function drawSkeleton(shoulder, elbow, wrist, hip, knee, ankle, color = '#00e5ff') {
-          canvasElement.width = videoElement.videoWidth || 640;
-          canvasElement.height = videoElement.videoHeight || 480;
+          syncCanvasSize();
           canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
           const w = canvasElement.width;
@@ -404,6 +445,20 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
               sendToRN('WORKOUT_FINISHED', {});
             }
           }, 1000);
+        }
+
+        // Contrapartida do startExitCountdown. Sem ela o isExiting ficava
+        // true pra sempre no primeiro frame ruim depois do "GO!": o bloco de
+        // contagem de repeticao e travado por !isExiting, entao a contagem
+        // morria na hora e nao voltava mais, e o timer de 3s terminava o
+        // treino. Sit-up e squat sempre tiveram essa funcao; so a flexao
+        // ficou sem.
+        function cancelExitCountdown() {
+          if (!isExiting) return;
+          clearInterval(exitTimer);
+          exitTimer = null;
+          isExiting = false;
+          sendToRN('PLANK_RESTORED', {});
         }
 
         // Exposto para o lado React Native chamar via injectJavaScript assim
@@ -478,7 +533,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
             if (!isWorkoutActive && !hasAllPoints) {
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               resetCountdown();
-              sendToRN('STATUS', { message: 'Fique visível para a câmera' });
+              sendStatus('Fique visível para a câmera');
               return;
             }
 
@@ -504,21 +559,27 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
             // aqui — a postura só valia pra iniciar o treino, então dava
             // pra ficar em pé "flexionando o braço" depois do início sem
             // nada travar isso.
-            if (isWorkoutActive && (!hasAllPoints || wrist.visibility < minVis || !isPlankValid)) {
+            const plankHolding = hasAllPoints && wrist.visibility >= minVis && isPlankValid;
+
+            if (isWorkoutActive && !plankHolding) {
               startExitCountdown();
+            } else if (isWorkoutActive && plankHolding) {
+              // Voltou pra prancha antes do STOP: destrava o isExiting e a
+              // contagem de repeticao volta a rodar.
+              cancelExitCountdown();
             }
 
             if (!isWorkoutActive) {
               if (!isValidBodyLine) {
                 drawSkeleton(shoulder, elbow, wrist, hip, knee, ankle, '#ff0055');
                 resetCountdown();
-                sendToRN('STATUS', { message: 'Alinhe o corpo reto em prancha' });
+                sendStatus('Alinhe o corpo reto em prancha');
                 return;
               }
               if (!isHorizontal) {
                 drawSkeleton(shoulder, elbow, wrist, hip, knee, ankle, '#ff0055');
                 resetCountdown();
-                sendToRN('STATUS', { message: 'Fique deitado, na horizontal, para começar' });
+                sendStatus('Fique deitado, na horizontal, para começar');
                 return;
               }
             }
@@ -527,7 +588,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
             const kneeAngle = calculateAngle(hip, knee, ankle);
             if (kneeAngle >= 0 && kneeAngle <= 135) {
               drawSkeleton(shoulder, elbow, wrist, hip, knee, ankle, '#ff0055');
-              sendToRN('STATUS', { message: 'Atenção: Ângulo do joelho inválido!' });
+              sendStatus('Atenção: Ângulo do joelho inválido!');
               if (!isWorkoutActive) resetCountdown();
               return;
             }
@@ -593,11 +654,12 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
                   count++;
                   stateChanged = true;
                 } else {
-                  sendToRN('STATUS', { message: 'Desça o corpo inteiro, não só o braço' });
+                  sendStatus('Desça o corpo inteiro, não só o braço');
                 }
               }
 
               if (stateChanged) {
+                invalidateStatus();
                 sendToRN('UPDATE', { count, stage });
               }
             }
@@ -612,7 +674,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           });
 
           camera.start().then(() => {
-            sendToRN('STATUS', { message: 'Posicione-se em prancha' });
+            sendStatus('Posicione-se em prancha');
           });
         }
       </script>
@@ -647,9 +709,6 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
           domStorageEnabled={true}
           allowFileAccess={true}
           allowUniversalAccessFromFileURLs={true}
-          onPermissionRequest={(request: any) => {
-            request.grant(request.resources);
-          }}
           onMessage={handleMessage}
           onLoadEnd={() => {
             webViewRef.current?.injectJavaScript(`
@@ -809,11 +868,11 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', gap: 12 },
   backButtonInline: { marginTop: 8 },
   grayOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.50)',
   },
   redOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(255, 0, 85, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -865,7 +924,7 @@ const styles = StyleSheet.create({
     zIndex: 40,
   },
   countdownContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'center',
     alignItems: 'center',

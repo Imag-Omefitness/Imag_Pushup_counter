@@ -470,9 +470,28 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           [24, 26], [26, 28], // perna direita
         ];
 
+        // Reatribuir canvas.width/height realoca o buffer inteiro e zera todo
+        // o estado do contexto — e faz isso mesmo quando o valor nao mudou.
+        // Como isso rodava dentro do drawSkeleton, eram ~1,2MB realocados a
+        // cada frame (~30x/s) so pra desenhar o esqueleto. Agora o tamanho so
+        // e escrito quando o video realmente muda de resolucao; a limpeza por
+        // frame continua sendo feita pelo clearRect, como antes.
+        let canvasW = 0;
+        let canvasH = 0;
+
+        function syncCanvasSize() {
+          const w = videoElement.videoWidth || 640;
+          const h = videoElement.videoHeight || 480;
+          if (w !== canvasW || h !== canvasH) {
+            canvasElement.width = w;
+            canvasElement.height = h;
+            canvasW = w;
+            canvasH = h;
+          }
+        }
+
         function drawSkeleton(kp, color = '#00e5ff') {
-          canvasElement.width = videoElement.videoWidth || 640;
-          canvasElement.height = videoElement.videoHeight || 480;
+          syncCanvasSize();
           canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
           const w = canvasElement.width;
@@ -888,9 +907,6 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           domStorageEnabled={true}
           allowFileAccess={true}
           allowUniversalAccessFromFileURLs={true}
-          onPermissionRequest={(request: any) => {
-            request.grant(request.resources);
-          }}
           onMessage={handleMessage}
           onLoadEnd={() => {
             webViewRef.current?.injectJavaScript(`
@@ -1027,11 +1043,11 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', gap: 12 },
   backButtonInline: { marginTop: 8 },
   grayOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.50)',
   },
   redOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(255, 0, 85, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1083,7 +1099,7 @@ const styles = StyleSheet.create({
     zIndex: 40,
   },
   countdownContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 10,
   },
   // Bloco centralizado no meio da tela (número da contagem regressiva /

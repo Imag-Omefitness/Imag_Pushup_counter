@@ -280,7 +280,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           if (!orientationOk && wasOk !== orientationOk) {
             resetCountdown();
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-            sendToRN('STATUS', { message: 'Apoie o celular na horizontal, de lado, para começar' });
+            sendStatus('Apoie o celular na horizontal, de lado, para começar');
           }
         };
 
@@ -288,6 +288,25 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(JSON.stringify({ type, ...payload }));
           }
+        }
+
+        // Os avisos de forma sao avaliados a cada frame; sem esse filtro
+        // seriam dezenas de postMessage por segundo repetindo o MESMO texto,
+        // e cada um vira um setFeedback -> re-render inteiro da tela no lado
+        // React Native. Mesmo filtro que o agachamento ja usava.
+        let lastStatusMessage = null;
+
+        function sendStatus(message) {
+          if (message === lastStatusMessage) return;
+          lastStatusMessage = message;
+          sendToRN('STATUS', { message });
+        }
+
+        // Qualquer outra mensagem (UPDATE, COUNTDOWN...) reescreve o texto de
+        // feedback na RN, entao o filtro acima precisa esquecer o ultimo
+        // status pra ele poder reaparecer.
+        function invalidateStatus() {
+          lastStatusMessage = null;
         }
 
         function calculateAngle(A, B, C) {
@@ -324,9 +343,28 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           return raw / torsoScale;
         }
 
+        // Reatribuir canvas.width/height realoca o buffer inteiro e zera todo
+        // o estado do contexto — e faz isso mesmo quando o valor nao mudou.
+        // Como isso rodava dentro do drawSkeleton, eram ~1,2MB realocados a
+        // cada frame (~30x/s) so pra desenhar o esqueleto. Agora o tamanho so
+        // e escrito quando o video realmente muda de resolucao; a limpeza por
+        // frame continua sendo feita pelo clearRect, como antes.
+        let canvasW = 0;
+        let canvasH = 0;
+
+        function syncCanvasSize() {
+          const w = videoElement.videoWidth || 640;
+          const h = videoElement.videoHeight || 480;
+          if (w !== canvasW || h !== canvasH) {
+            canvasElement.width = w;
+            canvasElement.height = h;
+            canvasW = w;
+            canvasH = h;
+          }
+        }
+
         function drawSkeleton(nose, shoulder, hip, knee, ankle, color = '#00e5ff') {
-          canvasElement.width = videoElement.videoWidth || 640;
-          canvasElement.height = videoElement.videoHeight || 480;
+          syncCanvasSize();
           canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
           const w = canvasElement.width;
@@ -479,7 +517,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
             if (!isWorkoutActive && !hasAllPoints) {
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               resetCountdown();
-              sendToRN('STATUS', { message: 'Fique de lado visível para a câmera' });
+              sendStatus('Fique de lado visível para a câmera');
               return;
             }
 
@@ -499,7 +537,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
               if (!isKneeBent) {
                 drawSkeleton(nose, shoulder, hip, knee, ankle, '#ff0055');
                 resetCountdown();
-                sendToRN('STATUS', { message: 'Dobre os joelhos para começar' });
+                sendStatus('Dobre os joelhos para começar');
                 return;
               }
             }
@@ -563,11 +601,12 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
                   count++;
                   stateChanged = true;
                 } else {
-                  sendToRN('STATUS', { message: 'Deite o tronco por completo, não só balance o ombro' });
+                  sendStatus('Deite o tronco por completo, não só balance o ombro');
                 }
               }
 
               if (stateChanged) {
+                invalidateStatus();
                 sendToRN('UPDATE', { count, stage });
               }
             }
@@ -582,7 +621,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           });
 
           camera.start().then(() => {
-            sendToRN('STATUS', { message: 'Posicione-se para os abdominais' });
+            sendStatus('Posicione-se para os abdominais');
           });
         }
       </script>
@@ -617,9 +656,6 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           domStorageEnabled={true}
           allowFileAccess={true}
           allowUniversalAccessFromFileURLs={true}
-          onPermissionRequest={(request: any) => {
-            request.grant(request.resources);
-          }}
           onMessage={handleMessage}
           onLoadEnd={() => {
             webViewRef.current?.injectJavaScript(`
@@ -774,11 +810,11 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000', gap: 12 },
   backButtonInline: { marginTop: 8 },
   grayOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(0, 0, 0, 0.50)',
   },
   redOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(255, 0, 85, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -830,7 +866,7 @@ const styles = StyleSheet.create({
     zIndex: 40,
   },
   countdownContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
