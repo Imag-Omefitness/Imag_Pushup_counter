@@ -30,6 +30,21 @@ import type { RootStackParamList } from '../navigation/types';
 import { useProfile } from '../context/ProfileContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import CoinIcon from '../assets/icons/Omecoin.svg';
+
+// Ícone de push-up recortado do fundo (composto a partir da arte em
+// pushup-no-background1.svg — o PNG já vem sem fundo, então dá pra colorir
+// com tintColor do mesmo jeito que os ícones do MaterialCommunityIcons).
+const PUSHUP_ICON = require('../assets/icons/pushup-icon.png');
+
+function PushupGlyph({ size, color }: { size: number; color: string }) {
+  return (
+    <Image
+      source={PUSHUP_ICON}
+      resizeMode="contain"
+      style={{ width: size, height: size, tintColor: color }}
+    />
+  );
+}
 export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
@@ -107,9 +122,9 @@ const DAILY_CHALLENGE = {
 const CHALLENGE_BORDER_RADIUS = 18;
 const CHALLENGE_TRAIL_WIDTH = 2.5;
 const CHALLENGE_GLOW_WIDTH = 7;
-const CHALLENGE_TRAIL_DURATION = 3800;
-// Fração do contorno ocupada pelo rastro (0.2 = 20% da volta).
-const CHALLENGE_TRAIL_FRACTION = 0.2;
+const CHALLENGE_TRAIL_DURATION = 4200;
+// Fração do contorno ocupada pelo rastro (0.3 = 30% da volta).
+const CHALLENGE_TRAIL_FRACTION = 0.3;
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
@@ -324,11 +339,15 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
           <View style={styles.goalList}>
             {DAILY_CHALLENGE.goals.map((goal) => (
               <View key={goal.id} style={styles.goalRow}>
-                <MaterialCommunityIcons
-                  name={goal.icon as keyof typeof MaterialCommunityIcons.glyphMap}
-                  size={28}
-                  color="#d6d6dc"
-                />
+                {goal.id === 'pushup' ? (
+                  <PushupGlyph size={28} color="#d6d6dc" />
+                ) : (
+                  <MaterialCommunityIcons
+                    name={goal.icon as keyof typeof MaterialCommunityIcons.glyphMap}
+                    size={28}
+                    color="#d6d6dc"
+                  />
+                )}
                 <Text style={styles.goalText}>X {goal.reps}</Text>
               </View>
             ))}
@@ -436,11 +455,15 @@ function VariantButton({
       onPress={() => onPress(variant)}
       accessibilityLabel={variant.title}
     >
-      <MaterialCommunityIcons
-        name={locked ? 'lock' : variant.icon}
-        size={locked ? 30 : 44}
-        color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
-      />
+      {!locked && variant.id === 'default' ? (
+        <PushupGlyph size={44} color={isActive ? '#ff3b30' : '#d6d6dc'} />
+      ) : (
+        <MaterialCommunityIcons
+          name={locked ? 'lock' : variant.icon}
+          size={locked ? 30 : 44}
+          color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
+        />
+      )}
     </Pressable>
   );
 }
@@ -728,11 +751,15 @@ function ExerciseCard({
             )}
 
             <View style={styles.iconCircle}>
-              <MaterialCommunityIcons
-                name={locked ? 'lock' : exercise.icon}
-                size={locked ? 22 : 30}
-                color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
-              />
+              {!locked && exercise.id === 'pushup' ? (
+                <PushupGlyph size={30} color={isActive ? '#ff3b30' : '#d6d6dc'} />
+              ) : (
+                <MaterialCommunityIcons
+                  name={locked ? 'lock' : exercise.icon}
+                  size={locked ? 22 : 30}
+                  color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
+                />
+              )}
             </View>
 
             <Text
@@ -1725,9 +1752,14 @@ const styles = StyleSheet.create({
     // raio — sem isso os cantos da imagem aparecem quadrados por cima.
     overflow: 'hidden',
   },
+  // As duas artes trazem cantos brancos (o "quadrado" do PNG original em
+  // volta do ícone arredondado, sem canal alfa no JPG) — um leve zoom empurra
+  // essa borda branca pra fora da área visível, que o card já recorta com
+  // overflow: hidden.
   modeArt: {
     width: '100%',
     height: '100%',
+    transform: [{ scale: 1.01 }],
   },
   // Modo não escolhido fica apagado: a diferença de brilho é o que separa os
   // dois, já que as duas artes têm cor forte própria.
