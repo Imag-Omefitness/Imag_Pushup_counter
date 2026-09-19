@@ -27,9 +27,16 @@ import Svg, {
 } from 'react-native-svg';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { useProfile } from '../context/ProfileContext';
+import {
+  useProfile,
+  levelFromTotalXp,
+  xpAtLevelStart,
+  xpNeededForLevel,
+} from '../context/ProfileContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import CoinIcon from '../assets/icons/Omecoin.svg';
+
+const STREAK_FLAME = require('../assets/gifs animation/tiny_fire_streak.gif');
 
 export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
 
@@ -121,6 +128,36 @@ const EXERCISES: Exercise[] = [
     available: false,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// Contagem animada de XP
+// ---------------------------------------------------------------------------
+// Ao voltar de um treino, a barra não pula direto para o valor final: ela
+// conta em passos de 0,1 XP (ver XP_PER_SECOND para o ritmo). O número sobe
+// nesses passos e a barra acompanha com um `Animated.timing` da duração de
+// um passo — como os passos são contínuos, o preenchimento sai suave em vez
+// de picotado.
+
+/** Altura da trilha de XP — o SVG do gradiente precisa dela. */
+const XP_TRACK_HEIGHT = 10;
+
+/** Ritmo da contagem, em XP por segundo. */
+const XP_PER_SECOND = 5;
+/** Quanto cada passo soma — fixo em 0,1 XP, o que mantém o "tique" decimal. */
+const XP_TICK_STEP = 0.1;
+/** Intervalo entre passos, em ms (20 ms a 5 XP/s). */
+const XP_TICK_MS = (XP_TICK_STEP / XP_PER_SECOND) * 1000;
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+// Vermelho no começo, laranja pela metade e amarelo perto do fim — as
+// paradas ficam em 50% e 90% como pedido, com um respiro até 100%.
+const XP_GRADIENT_STOPS = [
+  { offset: '0%', color: '#ff2d20' },
+  { offset: '50%', color: '#ff8c1a' },
+  { offset: '90%', color: '#ffd60a' },
+  { offset: '100%', color: '#ffe873' },
+] as const;
 
 // ---------------------------------------------------------------------------
 // Desafio Diário
@@ -862,7 +899,7 @@ function ExerciseCard({
 }
 
 export default function HomeScreen({ navigation }: Props) {
-  const { profile } = useProfile();
+  const { profile, consumePendingXp } = useProfile();
 
   const [selectedId, setSelectedId] = useState<ExerciseId | null>(null);
   const navigateTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -899,19 +936,131 @@ export default function HomeScreen({ navigation }: Props) {
     });
   };
 
+  // -------------------------------------------------------------------------
+  // Barra de XP animada
+  // -------------------------------------------------------------------------
+  // `displayXpTotal` é o XP total *exibido* — ele persegue o total real em
+  // passos de 0,1. Tudo que a barra mostra (nível, preenchimento, texto) é
+  // derivado dele, então o nível sobe sozinho no meio da contagem e a barra
+  // recomeça do zero sem que o total acumulado seja tocado.
+  const [displayXpTotal, setDisplayXpTotal] = useState(profile.xpTotal);
+  const displayXpRef = useRef(profile.xpTotal);
+  const xpTickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Ref com o total real: o efeito de foco não pode depender dele como
+  // dependência, senão remontaria e cortaria a contagem no meio.
+  const xpTotalRef = useRef(profile.xpTotal);
+  xpTotalRef.current = profile.xpTotal;
+
+  const setDisplayXp = useCallback((value: number) => {
+    displayXpRef.current = value;
+    setDisplayXpTotal(value);
+  }, []);
+
+  const stopXpCountUp = useCallback(() => {
+    if (xpTickRef.current) {
+      clearInterval(xpTickRef.current);
+      xpTickRef.current = null;
+    }
+  }, []);
+
+  const startXpCountUp = useCallback(
+    (target: number) => {
+      stopXpCountUp();
+      xpTickRef.current = setInterval(() => {
+        const next = round1(displayXpRef.current + XP_TICK_STEP);
+        if (next >= target) {
+          setDisplayXp(target);
+          stopXpCountUp();
+          return;
+        }
+        setDisplayXp(next);
+      }, XP_TICK_MS);
+    },
+    [setDisplayXp, stopXpCountUp]
+  );
+
   useFocusEffect(
     useCallback(() => {
       setSelectedId(null);
+
+      // O XP ganho no treino que acabou de terminar. Se houver, a barra
+      // volta para onde estava antes dele e sobe até o valor novo.
+      const gained = consumePendingXp();
+      if (gained > 0) {
+        setDisplayXp(round1(xpTotalRef.current - gained));
+        startXpCountUp(xpTotalRef.current);
+      } else {
+        setDisplayXp(xpTotalRef.current);
+      }
+
       return () => {
+        stopXpCountUp();
         if (navigateTimeout.current) clearTimeout(navigateTimeout.current);
       };
-    }, [])
+    }, [consumePendingXp, setDisplayXp, startXpCountUp, stopXpCountUp])
   );
 
-  const xpPercent = Math.min(
-    100,
-    (profile.xpCurrent / profile.xpToNextLevel) * 100
-  );
+  // Estado da barra derivado do total exibido.
+  const displayLevel = levelFromTotalXp(displayXpTotal);
+  const displayLevelXp = round1(displayXpTotal - xpAtLevelStart(displayLevel));
+  const displayLevelGoal = xpNeededForLevel(displayLevel);
+  const xpRatio = Math.max(0, Math.min(1, displayLevelXp / displayLevelGoal));
+
+  // Largura útil da trilha, medida no layout — a barra é uma View animada
+  // que revela um SVG com o gradiente pintado na largura inteira.
+  const [xpTrackWidth, setXpTrackWidth] = useState(0);
+
+  const xpFillAnim = useRef(new Animated.Value(0)).current;
+  const levelPopAnim = useRef(new Animated.Value(0)).current;
+  const prevLevelRef = useRef(displayLevel);
+
+  useEffect(() => {
+    const leveledUp = displayLevel > prevLevelRef.current;
+    const levelChanged = displayLevel !== prevLevelRef.current;
+    prevLevelRef.current = displayLevel;
+
+    if (levelChanged) {
+      // A barra acabou de encher: zera na hora e volta a crescer no nível
+      // novo. Sem `setValue`, o Animated interpolaria de ~100% até ~0% e a
+      // barra pareceria esvaziar em vez de reiniciar.
+      xpFillAnim.setValue(0);
+      if (leveledUp) {
+        levelPopAnim.setValue(0);
+        Animated.sequence([
+          Animated.timing(levelPopAnim, {
+            toValue: 1,
+            duration: 160,
+            easing: Easing.out(Easing.back(2.5)),
+            useNativeDriver: true,
+          }),
+          Animated.timing(levelPopAnim, {
+            toValue: 0,
+            duration: 260,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+    }
+
+    Animated.timing(xpFillAnim, {
+      toValue: xpRatio,
+      duration: XP_TICK_MS,
+      easing: Easing.linear,
+      // Largura não é suportada pela native driver.
+      useNativeDriver: false,
+    }).start();
+  }, [xpRatio, displayLevel, xpFillAnim, levelPopAnim]);
+
+  const xpFillWidth = xpFillAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, xpTrackWidth],
+  });
+
+  const levelPopScale = levelPopAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.25],
+  });
 
   const handlePress = (exercise: Exercise) => {
     setSelectedId(exercise.id);
@@ -972,9 +1121,22 @@ export default function HomeScreen({ navigation }: Props) {
     <SafeAreaView style={styles.container} {...panResponder.panHandlers}>
       {/* Barra superior */}
       <View style={styles.topBar}>
-        <View style={styles.coinBadge}>
-          <CoinIcon width={30} height={30} />
-          <Text style={styles.coinText}>{profile.coins}</Text>
+        <View style={styles.topBarLeft}>
+          <View style={styles.coinBadge}>
+            <CoinIcon width={30} height={30} />
+            <Text style={styles.coinText}>{profile.coins}</Text>
+          </View>
+
+          {/* Ofensiva (streak). O número ainda é fixo — a contagem real de
+              dias seguidos entra depois. */}
+          <View style={styles.streakBadge}>
+            <Image
+              source={STREAK_FLAME}
+              style={styles.streakFlame}
+              resizeMode="contain"
+            />
+            <Text style={styles.streakText}>{profile.streakDays}</Text>
+          </View>
         </View>
 
         <Pressable onPress={handleSettingsPress} style={styles.settingsButton}>
@@ -997,15 +1159,45 @@ export default function HomeScreen({ navigation }: Props) {
           </View>
 
           <View style={styles.xpRow}>
-            <View style={styles.lvBadge}>
-              <Text style={styles.lvBadgeText}>LV {profile.level}</Text>
-            </View>
-            <View style={styles.xpTrack}>
-              <View style={[styles.xpFill, { width: `${xpPercent}%` }]} />
+            <Animated.View
+              style={[styles.lvBadge, { transform: [{ scale: levelPopScale }] }]}
+            >
+              <Text style={styles.lvBadgeText}>LV {displayLevel}</Text>
+            </Animated.View>
+            <View
+              style={styles.xpTrack}
+              onLayout={(e) => setXpTrackWidth(e.nativeEvent.layout.width)}
+            >
+              {/* O gradiente é pintado na largura inteira da trilha e vai
+                  sendo revelado pela View animada — assim a cor em cada
+                  ponto depende de quanto a barra está cheia, e não de
+                  esticar um degradê curto. */}
+              <Animated.View style={[styles.xpFill, { width: xpFillWidth }]}>
+                {xpTrackWidth > 0 && (
+                  <Svg width={xpTrackWidth} height={XP_TRACK_HEIGHT}>
+                    <Defs>
+                      <LinearGradient id="xpFill" x1="0" y1="0" x2="1" y2="0">
+                        {XP_GRADIENT_STOPS.map((stop) => (
+                          <Stop
+                            key={stop.offset}
+                            offset={stop.offset}
+                            stopColor={stop.color}
+                          />
+                        ))}
+                      </LinearGradient>
+                    </Defs>
+                    <Rect
+                      width={xpTrackWidth}
+                      height={XP_TRACK_HEIGHT}
+                      fill="url(#xpFill)"
+                    />
+                  </Svg>
+                )}
+              </Animated.View>
             </View>
           </View>
           <Text style={styles.xpValueText}>
-            {profile.xpCurrent.toFixed(1)} / {profile.xpToNextLevel} XP
+            {displayLevelXp.toFixed(1)} / {displayLevelGoal} XP
           </Text>
         </View>
 
@@ -1240,12 +1432,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
   },
+  topBarLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACING.md,
+  },
   coinBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 4,
     paddingVertical: 2,
     gap: 4,
+  },
+  streakBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    gap: 2,
+  },
+  streakFlame: {
+    width: 42,
+    height: 42,
+  },
+  streakText: {
+    color: '#ff7a1a',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: '400',
+    letterSpacing: 0.8,
   },
   coinText: {
     color: '#ffd60a',
@@ -1422,15 +1638,15 @@ const styles = StyleSheet.create({
   },
   xpTrack: {
     flex: 1,
-    height: 8,
+    height: XP_TRACK_HEIGHT,
     backgroundColor: '#1c1c22',
-    borderRadius: 4,
+    borderRadius: XP_TRACK_HEIGHT / 2,
     overflow: 'hidden',
   },
   xpFill: {
     height: '100%',
-    backgroundColor: '#ff3b30',
-    borderRadius: 4,
+    borderRadius: XP_TRACK_HEIGHT / 2,
+    overflow: 'hidden',
   },
   xpValueText: {
     color: '#6b6b73',
