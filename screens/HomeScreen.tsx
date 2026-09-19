@@ -31,21 +31,45 @@ import { useProfile } from '../context/ProfileContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import CoinIcon from '../assets/icons/Omecoin.svg';
 
-// Ícone de push-up recortado do fundo (composto a partir da arte em
-// pushup-no-background1.svg — o PNG já vem sem fundo, então dá pra colorir
-// com tintColor do mesmo jeito que os ícones do MaterialCommunityIcons).
-const PUSHUP_ICON = require('../assets/icons/pushup-icon.png');
+export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
 
-function PushupGlyph({ size, color }: { size: number; color: string }) {
+// Artes dos exercícios, compostas a partir dos SVGs de assets/icons. Os PNGs
+// vêm sem fundo e cortados rente ao desenho: sem fundo dá pra pintar com
+// tintColor igual aos ícones do MaterialCommunityIcons, e sem a sobra
+// transparente em volta o resizeMode="contain" encosta o desenho nas bordas
+// do botão (antes cada arte tinha uma margem diferente e por isso aparecia
+// num tamanho diferente dentro do mesmo espaço).
+const EXERCISE_ART: Partial<Record<ExerciseId, ImageSourcePropType>> = {
+  pushup: require('../assets/icons/pushup-icon.png'),
+  situp: require('../assets/icons/situp-icon.png'),
+  squat: require('../assets/icons/squat-icon.png'),
+};
+
+// Tamanhos das artes dentro de cada botão. São maiores que os ícones de
+// fonte que substituíram porque a arte é um traço fino: no mesmo corpo ela
+// lê como um desenho menor. Os limites são o círculo de 50 do card da grade
+// e o tile de 104 do seletor.
+const CARD_GLYPH_SIZE = 38;
+const VARIANT_GLYPH_SIZE = 60;
+const GOAL_GLYPH_SIZE = 32;
+
+function ExerciseGlyph({
+  id,
+  size,
+  color,
+}: {
+  id: ExerciseId;
+  size: number;
+  color: string;
+}) {
   return (
     <Image
-      source={PUSHUP_ICON}
+      source={EXERCISE_ART[id]}
       resizeMode="contain"
       style={{ width: size, height: size, tintColor: color }}
     />
   );
 }
-export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -339,8 +363,8 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
           <View style={styles.goalList}>
             {DAILY_CHALLENGE.goals.map((goal) => (
               <View key={goal.id} style={styles.goalRow}>
-                {goal.id === 'pushup' ? (
-                  <PushupGlyph size={28} color="#d6d6dc" />
+                {EXERCISE_ART[goal.id] ? (
+                  <ExerciseGlyph id={goal.id} size={GOAL_GLYPH_SIZE} color="#d6d6dc" />
                 ) : (
                   <MaterialCommunityIcons
                     name={goal.icon as keyof typeof MaterialCommunityIcons.glyphMap}
@@ -397,23 +421,62 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
 // ---------------------------------------------------------------------------
 // Seletor de variação + modo de exercício
 // ---------------------------------------------------------------------------
-// Aberto ao tocar num card de exercício com variações (por enquanto só
-// push-up). Só a variação "default" tem exercício implementado — as outras
-// existem apenas como interface, esperando os próximos treinos.
-type PushupVariantId = 'default' | 'pike' | 'handstand';
-
-type PushupVariant = {
-  id: PushupVariantId;
+// Aberto ao tocar num card de exercício. O card é o mesmo pros três
+// exercícios — mudam só o título, a cor do rastro e a lista de variações, que
+// saem todos desta tabela. Pra ligar um exercício novo ao seletor basta
+// adicionar a entrada aqui: a Home decide se abre o seletor ou o "em breve"
+// pela presença da chave.
+//
+// Só a variação "default" tem treino implementado — as outras existem como
+// interface, esperando os próximos.
+type ExerciseVariant = {
+  id: string;
   title: string;
   icon: keyof typeof MaterialCommunityIcons.glyphMap;
   available: boolean;
 };
 
-const PUSHUP_VARIANTS: PushupVariant[] = [
-  { id: 'default', title: 'DEFAULT', icon: 'arm-flex', available: true },
-  { id: 'pike', title: 'PIKE', icon: 'triangle-outline', available: false },
-  { id: 'handstand', title: 'HANDSTAND', icon: 'yoga', available: false },
-];
+type PickerConfig = {
+  title: string;
+  route: 'Pushup' | 'Situp' | 'Squat';
+  // Início/meio/fim do degradê do rastro — a cor do grupo muscular do
+  // exercício, a mesma do pontinho no card e da legenda.
+  trailColors: readonly [string, string, string];
+  variants: ExerciseVariant[];
+};
+
+const EXERCISE_PICKERS: Partial<Record<ExerciseId, PickerConfig>> = {
+  pushup: {
+    title: 'PUSH-UPS',
+    route: 'Pushup',
+    trailColors: ['#1b4fd8', '#2f80ff', '#7ecbff'],
+    variants: [
+      { id: 'default', title: 'DEFAULT', icon: 'arm-flex', available: true },
+      { id: 'pike', title: 'PIKE', icon: 'triangle-outline', available: false },
+      { id: 'handstand', title: 'HANDSTAND', icon: 'yoga', available: false },
+    ],
+  },
+  situp: {
+    title: 'SIT-UPS',
+    route: 'Situp',
+    trailColors: ['#0d7a3d', '#20b95a', '#7ff0ae'],
+    variants: [
+      { id: 'default', title: 'DEFAULT', icon: 'human', available: true },
+      { id: 'crunch', title: 'CRUNCH', icon: 'arrow-collapse-vertical', available: false },
+      { id: 'twist', title: 'RUSSIAN TWIST', icon: 'rotate-3d-variant', available: false },
+    ],
+  },
+  squat: {
+    title: 'SQUATS',
+    route: 'Squat',
+    trailColors: ['#b8890f', '#f4c430', '#ffe9a3'],
+    variants: [
+      { id: 'default', title: 'DEFAULT', icon: 'weight-lifter', available: true },
+      { id: 'jump', title: 'JUMP', icon: 'arrow-up-bold-outline', available: false },
+      { id: 'pistol', title: 'PISTOL', icon: 'human-handsdown', available: false },
+    ],
+  },
+};
 
 type WorkoutModeId = 'practice' | 'time';
 
@@ -431,20 +494,21 @@ const WORKOUT_MODES: WorkoutMode[] = [
   { id: 'time', title: '60s', art: require('../assets/icons/60seconds-Mode-Icon.jpg') },
 ];
 
-// Azul do grupo "Chest", o mesmo da legenda e do pontinho no card de
-// push-up — é o que tinge o rastro em volta do seletor.
-const CHEST_TRAIL_COLORS = ['#1b4fd8', '#2f80ff', '#7ecbff'] as const;
-
 function VariantButton({
+  exerciseId,
   variant,
   isActive,
   onPress,
 }: {
-  variant: PushupVariant;
+  exerciseId: ExerciseId;
+  variant: ExerciseVariant;
   isActive: boolean;
-  onPress: (variant: PushupVariant) => void;
+  onPress: (variant: ExerciseVariant) => void;
 }) {
   const locked = !variant.available;
+  // A variação "default" é o próprio exercício, então usa a arte dele; as
+  // outras são poses distintas e seguem com ícone do MaterialCommunityIcons.
+  const useArt = !locked && variant.id === 'default' && !!EXERCISE_ART[exerciseId];
   return (
     <Pressable
       style={[
@@ -455,8 +519,12 @@ function VariantButton({
       onPress={() => onPress(variant)}
       accessibilityLabel={variant.title}
     >
-      {!locked && variant.id === 'default' ? (
-        <PushupGlyph size={44} color={isActive ? '#ff3b30' : '#d6d6dc'} />
+      {useArt ? (
+        <ExerciseGlyph
+          id={exerciseId}
+          size={VARIANT_GLYPH_SIZE}
+          color={isActive ? '#ff3b30' : '#d6d6dc'}
+        />
       ) : (
         <MaterialCommunityIcons
           name={locked ? 'lock' : variant.icon}
@@ -493,15 +561,19 @@ function ModeButton({
 }
 
 function ExercisePickerCard({
+  exerciseId,
+  config,
   selectedVariant,
   selectedMode,
   onSelectVariant,
   onSelectMode,
   onStart,
 }: {
-  selectedVariant: PushupVariantId | null;
+  exerciseId: ExerciseId;
+  config: PickerConfig;
+  selectedVariant: string | null;
   selectedMode: WorkoutModeId | null;
-  onSelectVariant: (variant: PushupVariant) => void;
+  onSelectVariant: (variant: ExerciseVariant) => void;
   onSelectMode: (mode: WorkoutMode) => void;
   onStart: () => void;
 }) {
@@ -555,11 +627,13 @@ function ExercisePickerCard({
         width={size.width}
         height={size.height}
         progress={trail}
-        gradientId="pickerTrail"
-        colors={CHEST_TRAIL_COLORS}
+        // O id do degradê é global dentro do SVG, então cada exercício precisa
+        // do seu — senão o primeiro a montar tingiria os outros.
+        gradientId={`pickerTrail-${exerciseId}`}
+        colors={config.trailColors}
       />
 
-      <Text style={styles.pickerTitle}>PUSH-UPS</Text>
+      <Text style={styles.pickerTitle}>{config.title}</Text>
 
       {/* Rolagem lateral: só 3 variações hoje, mas o espaço já é pensado
           pras próximas que forem entrando. */}
@@ -578,9 +652,10 @@ function ExercisePickerCard({
         })}
         scrollEventThrottle={16}
       >
-        {PUSHUP_VARIANTS.map((variant) => (
+        {config.variants.map((variant) => (
           <VariantButton
             key={variant.id}
+            exerciseId={exerciseId}
             variant={variant}
             isActive={selectedVariant === variant.id}
             onPress={onSelectVariant}
@@ -751,8 +826,12 @@ function ExerciseCard({
             )}
 
             <View style={styles.iconCircle}>
-              {!locked && exercise.id === 'pushup' ? (
-                <PushupGlyph size={30} color={isActive ? '#ff3b30' : '#d6d6dc'} />
+              {!locked && EXERCISE_ART[exercise.id] ? (
+                <ExerciseGlyph
+                  id={exercise.id}
+                  size={CARD_GLYPH_SIZE}
+                  color={isActive ? '#ff3b30' : '#d6d6dc'}
+                />
               ) : (
                 <MaterialCommunityIcons
                   name={locked ? 'lock' : exercise.icon}
@@ -790,23 +869,30 @@ export default function HomeScreen({ navigation }: Props) {
 
   const dailyChallenge = usePopModal();
   const exercisePicker = usePopModal();
-  const [pushupVariant, setPushupVariant] = useState<PushupVariantId | null>(null);
+  // Qual exercício o seletor está mostrando. Não é limpo no fechamento: o
+  // card continua montado durante a animação de saída, e zerar aqui faria
+  // ele piscar em branco antes de sumir.
+  const [pickerExercise, setPickerExercise] = useState<ExerciseId | null>(null);
+  const [variantId, setVariantId] = useState<string | null>(null);
   const [workoutMode, setWorkoutMode] = useState<WorkoutModeId | null>(null);
+  const pickerConfig = pickerExercise ? EXERCISE_PICKERS[pickerExercise] : undefined;
 
-  const openExercisePicker = () => {
-    setPushupVariant(null);
+  const openExercisePicker = (id: ExerciseId) => {
+    setPickerExercise(id);
+    setVariantId(null);
     setWorkoutMode(null);
     exercisePicker.open();
   };
 
   const handleStartWorkout = () => {
-    if (!pushupVariant || !workoutMode) return;
+    if (!pickerConfig || !variantId || !workoutMode) return;
+    const { route } = pickerConfig;
 
     exercisePicker.close(() => {
-      // Só a variação "default" no modo "practice" tem exercício
-      // implementado até aqui — o resto ainda é só interface.
-      if (pushupVariant === 'default' && workoutMode === 'practice') {
-        navigation.navigate('Pushup');
+      // Só a variação "default" no modo "practice" tem treino implementado
+      // até aqui — o resto ainda é só interface.
+      if (variantId === 'default' && workoutMode === 'practice') {
+        navigation.navigate(route);
       } else {
         Alert.alert('Em breve', 'Esse modo ainda está em desenvolvimento.');
       }
@@ -831,16 +917,14 @@ export default function HomeScreen({ navigation }: Props) {
     setSelectedId(exercise.id);
 
     navigateTimeout.current = setTimeout(() => {
-      if (exercise.id === 'pushup') {
-        openExercisePicker();
-      } else if (exercise.id === 'situp') {
-        navigation.navigate('Situp');
-      } else if (exercise.id === 'squat') {
-        navigation.navigate('Squat');
-      } else if (exercise.id === 'pullup') {
+      // Quem tem entrada em EXERCISE_PICKERS abre o seletor; o resto ainda
+      // não tem treino nenhum ligado.
+      if (EXERCISE_PICKERS[exercise.id]) {
+        openExercisePicker(exercise.id);
+      } else {
         Alert.alert(
           'Em breve',
-          'O modo pull-ups ainda está em desenvolvimento.'
+          `O modo ${exercise.title.toLowerCase()} ainda está em desenvolvimento.`
         );
       }
     }, 220);
@@ -857,7 +941,7 @@ export default function HomeScreen({ navigation }: Props) {
   };
 
   // Enquanto um modal está aberto o deslize da Home não vale: arrastar pro
-  // lado dentro do seletor de push-up (na rolagem de variações, por exemplo)
+  // lado dentro do seletor de exercício (na rolagem de variações, por exemplo)
   // abria o ranking por baixo do card. O PanResponder é criado uma vez só,
   // então a visibilidade vai por ref — ler o estado direto congelaria o valor
   // da primeira renderização dentro do closure.
@@ -1092,9 +1176,9 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
       </Modal>
 
-      {/* Seletor de variação/modo de push-up — abre ao tocar no card de
-          push-up na grade de exercícios. Mesmo padrão do Desafio Diário:
-          fundo com fade + card com "pop". */}
+      {/* Seletor de variação/modo — abre ao tocar num card da grade de
+          exercícios, mostrando o exercício tocado. Mesmo padrão do Desafio
+          Diário: fundo com fade + card com "pop". */}
       <Modal
         visible={exercisePicker.visible}
         transparent
@@ -1122,17 +1206,21 @@ export default function HomeScreen({ navigation }: Props) {
               ],
             }}
           >
-            <ExercisePickerCard
-              selectedVariant={pushupVariant}
-              selectedMode={workoutMode}
-              onSelectVariant={(variant) =>
-                variant.available
-                  ? setPushupVariant(variant.id)
-                  : Alert.alert('Em breve', 'Essa variação ainda está em desenvolvimento.')
-              }
-              onSelectMode={(mode) => setWorkoutMode(mode.id)}
-              onStart={handleStartWorkout}
-            />
+            {pickerExercise && pickerConfig && (
+              <ExercisePickerCard
+                exerciseId={pickerExercise}
+                config={pickerConfig}
+                selectedVariant={variantId}
+                selectedMode={workoutMode}
+                onSelectVariant={(variant) =>
+                  variant.available
+                    ? setVariantId(variant.id)
+                    : Alert.alert('Em breve', 'Essa variação ainda está em desenvolvimento.')
+                }
+                onSelectMode={(mode) => setWorkoutMode(mode.id)}
+                onStart={handleStartWorkout}
+              />
+            )}
           </Animated.View>
         </View>
       </Modal>
@@ -1673,7 +1761,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
 
-  /* Seletor de variação/modo de push-up */
+  /* Seletor de variação/modo de exercício */
   pickerRoot: {
     flex: 1,
     justifyContent: 'flex-end',
