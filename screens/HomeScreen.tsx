@@ -12,7 +12,9 @@ import {
   Easing,
   PanResponder,
   Modal,
+  Image,
 } from 'react-native';
+import type { ImageSourcePropType } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import Svg, {
@@ -28,7 +30,46 @@ import type { RootStackParamList } from '../navigation/types';
 import { useProfile } from '../context/ProfileContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import CoinIcon from '../assets/icons/Omecoin.svg';
+
 export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
+
+// Artes dos exercícios, compostas a partir dos SVGs de assets/icons. Os PNGs
+// vêm sem fundo e cortados rente ao desenho: sem fundo dá pra pintar com
+// tintColor igual aos ícones do MaterialCommunityIcons, e sem a sobra
+// transparente em volta o resizeMode="contain" encosta o desenho nas bordas
+// do botão (antes cada arte tinha uma margem diferente e por isso aparecia
+// num tamanho diferente dentro do mesmo espaço).
+const EXERCISE_ART: Partial<Record<ExerciseId, ImageSourcePropType>> = {
+  pushup: require('../assets/icons/pushup-icon.png'),
+  situp: require('../assets/icons/situp-icon.png'),
+  squat: require('../assets/icons/squat-icon.png'),
+};
+
+// Tamanhos das artes dentro de cada botão. São maiores que os ícones de
+// fonte que substituíram porque a arte é um traço fino: no mesmo corpo ela
+// lê como um desenho menor. Os limites são o círculo de 50 do card da grade
+// e o tile de 104 do seletor.
+const CARD_GLYPH_SIZE = 38;
+const VARIANT_GLYPH_SIZE = 60;
+const GOAL_GLYPH_SIZE = 32;
+
+function ExerciseGlyph({
+  id,
+  size,
+  color,
+}: {
+  id: ExerciseId;
+  size: number;
+  color: string;
+}) {
+  return (
+    <Image
+      source={EXERCISE_ART[id]}
+      resizeMode="contain"
+      style={{ width: size, height: size, tintColor: color }}
+    />
+  );
+}
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -105,9 +146,9 @@ const DAILY_CHALLENGE = {
 const CHALLENGE_BORDER_RADIUS = 18;
 const CHALLENGE_TRAIL_WIDTH = 2.5;
 const CHALLENGE_GLOW_WIDTH = 7;
-const CHALLENGE_TRAIL_DURATION = 3800;
-// Fração do contorno ocupada pelo rastro (0.2 = 20% da volta).
-const CHALLENGE_TRAIL_FRACTION = 0.2;
+const CHALLENGE_TRAIL_DURATION = 4200;
+// Fração do contorno ocupada pelo rastro (0.3 = 30% da volta).
+const CHALLENGE_TRAIL_FRACTION = 0.3;
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
@@ -122,14 +163,23 @@ const AnimatedRect = Animated.createAnimatedComponent(Rect);
 // thread de JS. É uma prop só, num elemento só, então na prática segura os
 // 60fps — mas é o primeiro lugar a simplificar se aparecer engasgo em
 // aparelho fraco.
-function ChallengeTrail({
+//
+// Reaproveitado por qualquer card que precise do mesmo efeito de borda
+// giratória (Desafio Diário, seleção de variação de exercício etc).
+function GradientTrail({
   width,
   height,
   progress,
+  gradientId = 'gradientTrail',
+  colors = ['#ff2d20', '#ffa726', '#ffd60a'],
 }: {
   width: number;
   height: number;
   progress: Animated.Value;
+  gradientId?: string;
+  // Início/meio/fim do degradê — por padrão o vermelho-laranja-amarelo do
+  // Desafio Diário. O seletor de exercício passa a cor do grupo muscular.
+  colors?: readonly [string, string, string];
 }) {
   if (!width || !height) return null;
 
@@ -164,7 +214,7 @@ function ChallengeTrail({
   };
 
   const dashProps = {
-    stroke: 'url(#challengeTrail)',
+    stroke: `url(#${gradientId})`,
     strokeDasharray: [trailLength, perimeter - trailLength],
     strokeDashoffset: dashOffset,
     strokeLinecap: 'round' as const,
@@ -173,10 +223,10 @@ function ChallengeTrail({
   return (
     <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
       <Defs>
-        <LinearGradient id="challengeTrail" x1="0%" y1="0%" x2="100%" y2="100%">
-          <Stop offset="0%" stopColor="#ff2d20" />
-          <Stop offset="50%" stopColor="#ffa726" />
-          <Stop offset="100%" stopColor="#ffd60a" />
+        <LinearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
+          <Stop offset="0%" stopColor={colors[0]} />
+          <Stop offset="50%" stopColor={colors[1]} />
+          <Stop offset="100%" stopColor={colors[2]} />
         </LinearGradient>
       </Defs>
 
@@ -196,6 +246,75 @@ function ChallengeTrail({
       <AnimatedRect {...pathProps} {...dashProps} strokeWidth={CHALLENGE_TRAIL_WIDTH} />
     </Svg>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Modal com "pop": fundo escurece com fade e o card entra com uma mola,
+// saindo do mesmo jeito ao fechar. Compartilhado pelo Desafio Diário e pelo
+// seletor de variação/modo de exercício — os dois abrem/fecham do mesmo
+// jeito, só o conteúdo interno muda.
+// ---------------------------------------------------------------------------
+function usePopModal() {
+  const [visible, setVisible] = useState(false);
+  const backdropAnim = useRef(new Animated.Value(0)).current;
+  const popAnim = useRef(new Animated.Value(0)).current;
+
+  const open = useCallback(() => {
+    backdropAnim.setValue(0);
+    popAnim.setValue(0);
+    setVisible(true);
+
+    Animated.parallel([
+      Animated.timing(backdropAnim, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.spring(popAnim, {
+        toValue: 1,
+        friction: 7,
+        tension: 70,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [backdropAnim, popAnim]);
+
+  // Só desmonta o conteúdo depois da animação de saída — se o estado virasse
+  // false na hora, o card sumiria de um frame pro outro.
+  const close = useCallback(
+    (onClosed?: () => void) => {
+      Animated.parallel([
+        Animated.timing(backdropAnim, {
+          toValue: 0,
+          duration: 140,
+          useNativeDriver: true,
+        }),
+        Animated.timing(popAnim, {
+          toValue: 0,
+          duration: 140,
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        if (!finished) return;
+        setVisible(false);
+        onClosed?.();
+      });
+    },
+    [backdropAnim, popAnim]
+  );
+
+  // A mola passa um pouco de 1 antes de assentar, então a escala estoura
+  // levemente além do tamanho final — é isso que dá a sensação de "pop".
+  // A opacidade é travada em 1 pra esse overshoot não virar valor inválido.
+  const scale = popAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] });
+  const translateY = popAnim.interpolate({ inputRange: [0, 1], outputRange: [28, 0] });
+  const opacity = popAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  return { visible, backdropAnim, open, close, scale, translateY, opacity };
 }
 
 function DailyChallengeCard({ onStart }: { onStart: () => void }) {
@@ -225,7 +344,12 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
         })
       }
     >
-      <ChallengeTrail width={size.width} height={size.height} progress={trail} />
+      <GradientTrail
+        width={size.width}
+        height={size.height}
+        progress={trail}
+        gradientId="dailyChallengeTrail"
+      />
 
       <Text style={styles.challengeTitle}>DAILY CHALLENGE</Text>
 
@@ -239,11 +363,15 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
           <View style={styles.goalList}>
             {DAILY_CHALLENGE.goals.map((goal) => (
               <View key={goal.id} style={styles.goalRow}>
-                <MaterialCommunityIcons
-                  name={goal.icon as keyof typeof MaterialCommunityIcons.glyphMap}
-                  size={28}
-                  color="#d6d6dc"
-                />
+                {EXERCISE_ART[goal.id] ? (
+                  <ExerciseGlyph id={goal.id} size={GOAL_GLYPH_SIZE} color="#d6d6dc" />
+                ) : (
+                  <MaterialCommunityIcons
+                    name={goal.icon as keyof typeof MaterialCommunityIcons.glyphMap}
+                    size={28}
+                    color="#d6d6dc"
+                  />
+                )}
                 <Text style={styles.goalText}>X {goal.reps}</Text>
               </View>
             ))}
@@ -283,6 +411,291 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
           <Pressable style={styles.startButton} onPress={onStart}>
             <Text style={styles.startButtonText}>INICIAR</Text>
             <MaterialCommunityIcons name="shield-half-full" size={26} color="#ffffff" />
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Seletor de variação + modo de exercício
+// ---------------------------------------------------------------------------
+// Aberto ao tocar num card de exercício. O card é o mesmo pros três
+// exercícios — mudam só o título, a cor do rastro e a lista de variações, que
+// saem todos desta tabela. Pra ligar um exercício novo ao seletor basta
+// adicionar a entrada aqui: a Home decide se abre o seletor ou o "em breve"
+// pela presença da chave.
+//
+// Só a variação "default" tem treino implementado — as outras existem como
+// interface, esperando os próximos.
+type ExerciseVariant = {
+  id: string;
+  title: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+  available: boolean;
+};
+
+type PickerConfig = {
+  title: string;
+  route: 'Pushup' | 'Situp' | 'Squat';
+  // Início/meio/fim do degradê do rastro — a cor do grupo muscular do
+  // exercício, a mesma do pontinho no card e da legenda.
+  trailColors: readonly [string, string, string];
+  variants: ExerciseVariant[];
+};
+
+const EXERCISE_PICKERS: Partial<Record<ExerciseId, PickerConfig>> = {
+  pushup: {
+    title: 'PUSH-UPS',
+    route: 'Pushup',
+    trailColors: ['#1b4fd8', '#2f80ff', '#7ecbff'],
+    variants: [
+      { id: 'default', title: 'DEFAULT', icon: 'arm-flex', available: true },
+      { id: 'pike', title: 'PIKE', icon: 'triangle-outline', available: false },
+      { id: 'handstand', title: 'HANDSTAND', icon: 'yoga', available: false },
+    ],
+  },
+  situp: {
+    title: 'SIT-UPS',
+    route: 'Situp',
+    trailColors: ['#0d7a3d', '#20b95a', '#7ff0ae'],
+    variants: [
+      { id: 'default', title: 'DEFAULT', icon: 'human', available: true },
+      { id: 'crunch', title: 'CRUNCH', icon: 'arrow-collapse-vertical', available: false },
+      { id: 'twist', title: 'RUSSIAN TWIST', icon: 'rotate-3d-variant', available: false },
+    ],
+  },
+  squat: {
+    title: 'SQUATS',
+    route: 'Squat',
+    trailColors: ['#b8890f', '#f4c430', '#ffe9a3'],
+    variants: [
+      { id: 'default', title: 'DEFAULT', icon: 'weight-lifter', available: true },
+      { id: 'jump', title: 'JUMP', icon: 'arrow-up-bold-outline', available: false },
+      { id: 'pistol', title: 'PISTOL', icon: 'human-handsdown', available: false },
+    ],
+  },
+};
+
+type WorkoutModeId = 'practice' | 'time';
+
+// A arte de cada modo já vem com o próprio rótulo ("PRACTICE" / "60s")
+// desenhado na imagem, então o botão é só a arte ocupando o card inteiro —
+// não há Text por cima pra não duplicar o nome.
+type WorkoutMode = {
+  id: WorkoutModeId;
+  title: string;
+  art: ImageSourcePropType;
+};
+
+const WORKOUT_MODES: WorkoutMode[] = [
+  { id: 'practice', title: 'PRACTICE', art: require('../assets/icons/Practice-Icon.jpg') },
+  { id: 'time', title: '60s', art: require('../assets/icons/60seconds-Mode-Icon.jpg') },
+];
+
+function VariantButton({
+  exerciseId,
+  variant,
+  isActive,
+  onPress,
+}: {
+  exerciseId: ExerciseId;
+  variant: ExerciseVariant;
+  isActive: boolean;
+  onPress: (variant: ExerciseVariant) => void;
+}) {
+  const locked = !variant.available;
+  // A variação "default" é o próprio exercício, então usa a arte dele; as
+  // outras são poses distintas e seguem com ícone do MaterialCommunityIcons.
+  const useArt = !locked && variant.id === 'default' && !!EXERCISE_ART[exerciseId];
+  return (
+    <Pressable
+      style={[
+        styles.variantCard,
+        isActive && styles.variantCardActive,
+        locked && styles.variantCardLocked,
+      ]}
+      onPress={() => onPress(variant)}
+      accessibilityLabel={variant.title}
+    >
+      {useArt ? (
+        <ExerciseGlyph
+          id={exerciseId}
+          size={VARIANT_GLYPH_SIZE}
+          color={isActive ? '#ff3b30' : '#d6d6dc'}
+        />
+      ) : (
+        <MaterialCommunityIcons
+          name={locked ? 'lock' : variant.icon}
+          size={locked ? 30 : 44}
+          color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
+        />
+      )}
+    </Pressable>
+  );
+}
+
+function ModeButton({
+  mode,
+  isActive,
+  onPress,
+}: {
+  mode: WorkoutMode;
+  isActive: boolean;
+  onPress: (mode: WorkoutMode) => void;
+}) {
+  return (
+    <Pressable
+      style={[styles.modeCard, isActive && styles.modeCardActive]}
+      onPress={() => onPress(mode)}
+      accessibilityLabel={mode.title}
+    >
+      <Image
+        source={mode.art}
+        style={[styles.modeArt, !isActive && styles.modeArtInactive]}
+        resizeMode="cover"
+      />
+    </Pressable>
+  );
+}
+
+function ExercisePickerCard({
+  exerciseId,
+  config,
+  selectedVariant,
+  selectedMode,
+  onSelectVariant,
+  onSelectMode,
+  onStart,
+}: {
+  exerciseId: ExerciseId;
+  config: PickerConfig;
+  selectedVariant: string | null;
+  selectedMode: WorkoutModeId | null;
+  onSelectVariant: (variant: ExerciseVariant) => void;
+  onSelectMode: (mode: WorkoutMode) => void;
+  onStart: () => void;
+}) {
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  const [scrollVisible, setScrollVisible] = useState(0);
+  const [scrollContent, setScrollContent] = useState(0);
+  const trail = useRef(new Animated.Value(0)).current;
+  const scrollX = useRef(new Animated.Value(0)).current;
+  const canStart = !!selectedVariant && !!selectedMode;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(trail, {
+        toValue: 1,
+        duration: CHALLENGE_TRAIL_DURATION,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [trail]);
+
+  // Barra de rolagem desenhada à mão: a nativa aparece e some sozinha, e
+  // aqui ela faz parte do desenho — é o que avisa que existem mais
+  // variações fora da tela. O polegar ocupa a mesma fração da trilha que a
+  // área visível ocupa do conteúdo, então ele encolhe conforme entram
+  // novos exercícios.
+  const visibleRatio = scrollContent > 0 ? Math.min(1, scrollVisible / scrollContent) : 1;
+  const thumbWidth = Math.max(24, scrollVisible * visibleRatio);
+  const thumbX = scrollX.interpolate({
+    inputRange: [0, Math.max(1, scrollContent - scrollVisible)],
+    outputRange: [0, Math.max(0, scrollVisible - thumbWidth)],
+    extrapolate: 'clamp',
+  });
+
+  const notAvailableYet = () =>
+    Alert.alert('Em breve', 'Esse modo ainda está em desenvolvimento.');
+
+  return (
+    <View
+      style={styles.pickerCard}
+      onLayout={(e) =>
+        setSize({
+          width: e.nativeEvent.layout.width,
+          height: e.nativeEvent.layout.height,
+        })
+      }
+    >
+      <GradientTrail
+        width={size.width}
+        height={size.height}
+        progress={trail}
+        // O id do degradê é global dentro do SVG, então cada exercício precisa
+        // do seu — senão o primeiro a montar tingiria os outros.
+        gradientId={`pickerTrail-${exerciseId}`}
+        colors={config.trailColors}
+      />
+
+      <Text style={styles.pickerTitle}>{config.title}</Text>
+
+      {/* Rolagem lateral: só 3 variações hoje, mas o espaço já é pensado
+          pras próximas que forem entrando. */}
+      <Animated.ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.variantScroll}
+        contentContainerStyle={styles.variantScrollContent}
+        // A medida é lida direto do evento, fora de um updater de estado:
+        // o React recicla o evento sintético antes de rodar o updater, e lá
+        // dentro `nativeEvent` já chega nulo.
+        onLayout={(e) => setScrollVisible(e.nativeEvent.layout.width)}
+        onContentSizeChange={(width) => setScrollContent(width)}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
+          useNativeDriver: true,
+        })}
+        scrollEventThrottle={16}
+      >
+        {config.variants.map((variant) => (
+          <VariantButton
+            key={variant.id}
+            exerciseId={exerciseId}
+            variant={variant}
+            isActive={selectedVariant === variant.id}
+            onPress={onSelectVariant}
+          />
+        ))}
+      </Animated.ScrollView>
+
+      <View style={styles.scrollTrack}>
+        <Animated.View
+          style={[
+            styles.scrollThumb,
+            { width: thumbWidth, transform: [{ translateX: thumbX }] },
+          ]}
+        />
+      </View>
+
+      <View style={styles.actionRow}>
+        {WORKOUT_MODES.map((mode) => (
+          <ModeButton
+            key={mode.id}
+            mode={mode}
+            isActive={selectedMode === mode.id}
+            onPress={onSelectMode}
+          />
+        ))}
+
+        <View style={styles.pillColumn}>
+          <Pressable style={styles.pill} onPress={notAvailableYet}>
+            <Text style={styles.pillText}>1 V 1</Text>
+          </Pressable>
+          <Pressable style={styles.pill} onPress={notAvailableYet}>
+            <Text style={styles.pillText}>2 V 2</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.pill, !canStart && styles.pillDisabled]}
+            onPress={onStart}
+            disabled={!canStart}
+          >
+            <Text style={styles.pillText}>INICIAR</Text>
+            <MaterialCommunityIcons name="shield-half-full" size={16} color="#ffffff" />
           </Pressable>
         </View>
       </View>
@@ -413,11 +826,19 @@ function ExerciseCard({
             )}
 
             <View style={styles.iconCircle}>
-              <MaterialCommunityIcons
-                name={locked ? 'lock' : exercise.icon}
-                size={locked ? 22 : 30}
-                color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
-              />
+              {!locked && EXERCISE_ART[exercise.id] ? (
+                <ExerciseGlyph
+                  id={exercise.id}
+                  size={CARD_GLYPH_SIZE}
+                  color={isActive ? '#ff3b30' : '#d6d6dc'}
+                />
+              ) : (
+                <MaterialCommunityIcons
+                  name={locked ? 'lock' : exercise.icon}
+                  size={locked ? 22 : 30}
+                  color={locked ? '#6b6b73' : isActive ? '#ff3b30' : '#d6d6dc'}
+                />
+              )}
             </View>
 
             <Text
@@ -446,73 +867,37 @@ export default function HomeScreen({ navigation }: Props) {
   const [selectedId, setSelectedId] = useState<ExerciseId | null>(null);
   const navigateTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Desafio diário: `showDailyChallenge` controla a montagem do <Modal>, e os
-  // dois Animated.Value abaixo controlam a aparição. O <Modal> entra com
-  // animationType="none" porque a animação nativa dele escureceria e
-  // deslizaria tudo junto — aqui o fundo faz fade enquanto o card dá um
-  // "pop" com mola, cada um no seu tempo. Ambos usam só opacity/transform,
-  // então rodam na native driver.
-  const [showDailyChallenge, setShowDailyChallenge] = useState(false);
-  const backdropAnim = useRef(new Animated.Value(0)).current;
-  const popAnim = useRef(new Animated.Value(0)).current;
+  const dailyChallenge = usePopModal();
+  const exercisePicker = usePopModal();
+  // Qual exercício o seletor está mostrando. Não é limpo no fechamento: o
+  // card continua montado durante a animação de saída, e zerar aqui faria
+  // ele piscar em branco antes de sumir.
+  const [pickerExercise, setPickerExercise] = useState<ExerciseId | null>(null);
+  const [variantId, setVariantId] = useState<string | null>(null);
+  const [workoutMode, setWorkoutMode] = useState<WorkoutModeId | null>(null);
+  const pickerConfig = pickerExercise ? EXERCISE_PICKERS[pickerExercise] : undefined;
 
-  const openDailyChallenge = () => {
-    backdropAnim.setValue(0);
-    popAnim.setValue(0);
-    setShowDailyChallenge(true);
-
-    Animated.parallel([
-      Animated.timing(backdropAnim, {
-        toValue: 1,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-      Animated.spring(popAnim, {
-        toValue: 1,
-        friction: 7,
-        tension: 70,
-        useNativeDriver: true,
-      }),
-    ]).start();
+  const openExercisePicker = (id: ExerciseId) => {
+    setPickerExercise(id);
+    setVariantId(null);
+    setWorkoutMode(null);
+    exercisePicker.open();
   };
 
-  // Desmonta o Modal só depois da animação de saída — se o estado virasse
-  // false na hora, o card sumiria de um frame pro outro.
-  const closeDailyChallenge = (onClosed?: () => void) => {
-    Animated.parallel([
-      Animated.timing(backdropAnim, {
-        toValue: 0,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-      Animated.timing(popAnim, {
-        toValue: 0,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
-      if (!finished) return;
-      setShowDailyChallenge(false);
-      onClosed?.();
+  const handleStartWorkout = () => {
+    if (!pickerConfig || !variantId || !workoutMode) return;
+    const { route } = pickerConfig;
+
+    exercisePicker.close(() => {
+      // Só a variação "default" no modo "practice" tem treino implementado
+      // até aqui — o resto ainda é só interface.
+      if (variantId === 'default' && workoutMode === 'practice') {
+        navigation.navigate(route);
+      } else {
+        Alert.alert('Em breve', 'Esse modo ainda está em desenvolvimento.');
+      }
     });
   };
-
-  // A mola passa um pouco de 1 antes de assentar, então a escala estoura
-  // levemente além do tamanho final — é isso que dá a sensação de "pop".
-  // A opacidade é travada em 1 pra esse overshoot não virar valor inválido.
-  const popScale = popAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.9, 1],
-  });
-  const popTranslateY = popAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [28, 0],
-  });
-  const popOpacity = popAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-    extrapolate: 'clamp',
-  });
 
   useFocusEffect(
     useCallback(() => {
@@ -532,16 +917,14 @@ export default function HomeScreen({ navigation }: Props) {
     setSelectedId(exercise.id);
 
     navigateTimeout.current = setTimeout(() => {
-      if (exercise.id === 'pushup') {
-        navigation.navigate('Pushup');
-      } else if (exercise.id === 'situp') {
-        navigation.navigate('Situp');
-      } else if (exercise.id === 'squat') {
-        navigation.navigate('Squat');
-      } else if (exercise.id === 'pullup') {
+      // Quem tem entrada em EXERCISE_PICKERS abre o seletor; o resto ainda
+      // não tem treino nenhum ligado.
+      if (EXERCISE_PICKERS[exercise.id]) {
+        openExercisePicker(exercise.id);
+      } else {
         Alert.alert(
           'Em breve',
-          'O modo pull-ups ainda está em desenvolvimento.'
+          `O modo ${exercise.title.toLowerCase()} ainda está em desenvolvimento.`
         );
       }
     }, 220);
@@ -552,8 +935,18 @@ export default function HomeScreen({ navigation }: Props) {
   };
 
   const goToRanking = () => {
+    // Trava final: nenhum caminho leva ao ranking com um modal por cima.
+    if (modalOpenRef.current) return;
     navigation.navigate('Ranking');
   };
+
+  // Enquanto um modal está aberto o deslize da Home não vale: arrastar pro
+  // lado dentro do seletor de exercício (na rolagem de variações, por exemplo)
+  // abria o ranking por baixo do card. O PanResponder é criado uma vez só,
+  // então a visibilidade vai por ref — ler o estado direto congelaria o valor
+  // da primeira renderização dentro do closure.
+  const modalOpenRef = useRef(false);
+  modalOpenRef.current = dailyChallenge.visible || exercisePicker.visible;
 
   // Detector do gesto de Swipe (deslize) para a direita — usa o
   // PanResponder nativo do React Native, sem depender de
@@ -561,9 +954,13 @@ export default function HomeScreen({ navigation }: Props) {
   // causava o erro "Unable to resolve module react-native-gesture-handler").
   const panResponder = useRef(
     PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_evt, gestureState) =>
-        Math.abs(gestureState.dx) > 20 && Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5,
+        !modalOpenRef.current &&
+        Math.abs(gestureState.dx) > 20 &&
+        Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.5,
       onPanResponderRelease: (_evt, gestureState) => {
+        if (modalOpenRef.current) return;
         if (gestureState.dx > 50) {
           goToRanking();
         }
@@ -713,7 +1110,7 @@ export default function HomeScreen({ navigation }: Props) {
 
         <Pressable
           style={styles.navItemCenter}
-          onPress={openDailyChallenge}
+          onPress={dailyChallenge.open}
         >
           <View style={styles.navCenterCircle}>
             <MaterialCommunityIcons
@@ -742,36 +1139,88 @@ export default function HomeScreen({ navigation }: Props) {
           camadas absolutas separadas, e o card vem por último (logo, por
           cima), então tocar no card não fecha o modal. */}
       <Modal
-        visible={showDailyChallenge}
+        visible={dailyChallenge.visible}
         transparent
         animationType="none"
         statusBarTranslucent
-        onRequestClose={() => closeDailyChallenge()}
+        onRequestClose={() => dailyChallenge.close()}
       >
         <View style={styles.challengeRoot}>
           <Animated.View
             pointerEvents="none"
-            style={[styles.challengeBackdrop, { opacity: backdropAnim }]}
+            style={[styles.challengeBackdrop, { opacity: dailyChallenge.backdropAnim }]}
           />
 
           <Pressable
             style={StyleSheet.absoluteFill}
-            onPress={() => closeDailyChallenge()}
+            onPress={() => dailyChallenge.close()}
           />
 
           <Animated.View
             style={{
-              opacity: popOpacity,
-              transform: [{ scale: popScale }, { translateY: popTranslateY }],
+              opacity: dailyChallenge.opacity,
+              transform: [
+                { scale: dailyChallenge.scale },
+                { translateY: dailyChallenge.translateY },
+              ],
             }}
           >
             <DailyChallengeCard
               onStart={() =>
-                closeDailyChallenge(() =>
+                dailyChallenge.close(() =>
                   Alert.alert('Em breve', 'O desafio diário ainda está em desenvolvimento.')
                 )
               }
             />
+          </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Seletor de variação/modo — abre ao tocar num card da grade de
+          exercícios, mostrando o exercício tocado. Mesmo padrão do Desafio
+          Diário: fundo com fade + card com "pop". */}
+      <Modal
+        visible={exercisePicker.visible}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={() => exercisePicker.close()}
+      >
+        <View style={styles.pickerRoot}>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.challengeBackdrop, { opacity: exercisePicker.backdropAnim }]}
+          />
+
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => exercisePicker.close()}
+          />
+
+          <Animated.View
+            style={{
+              opacity: exercisePicker.opacity,
+              transform: [
+                { scale: exercisePicker.scale },
+                { translateY: exercisePicker.translateY },
+              ],
+            }}
+          >
+            {pickerExercise && pickerConfig && (
+              <ExercisePickerCard
+                exerciseId={pickerExercise}
+                config={pickerConfig}
+                selectedVariant={variantId}
+                selectedMode={workoutMode}
+                onSelectVariant={(variant) =>
+                  variant.available
+                    ? setVariantId(variant.id)
+                    : Alert.alert('Em breve', 'Essa variação ainda está em desenvolvimento.')
+                }
+                onSelectMode={(mode) => setWorkoutMode(mode.id)}
+                onStart={handleStartWorkout}
+              />
+            )}
           </Animated.View>
         </View>
       </Modal>
@@ -1310,5 +1759,127 @@ const styles = StyleSheet.create({
     fontSize: 19,
     lineHeight: 24,
     letterSpacing: 1.5,
+  },
+
+  /* Seletor de variação/modo de exercício */
+  pickerRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingHorizontal: 20,
+    paddingBottom: 140,
+  },
+  pickerCard: {
+    backgroundColor: '#15151f',
+    borderRadius: CHALLENGE_BORDER_RADIUS,
+    padding: SPACING.lg,
+    overflow: 'hidden',
+  },
+  pickerTitle: {
+    color: '#ffffff',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 22,
+    lineHeight: 28,
+    letterSpacing: 2,
+    textAlign: 'center',
+    marginBottom: SPACING.md,
+  },
+  variantScroll: {
+    flexGrow: 0,
+  },
+  variantScrollContent: {
+    gap: SPACING.sm,
+  },
+  variantCard: {
+    width: 104,
+    height: 104,
+    borderRadius: RADIUS.lg,
+    backgroundColor: '#20202d',
+    borderWidth: 1.5,
+    borderColor: '#171722',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  variantCardActive: {
+    borderColor: '#ff3b30',
+    backgroundColor: '#25181a',
+  },
+  variantCardLocked: {
+    opacity: 0.55,
+  },
+  scrollTrack: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#20202d',
+    marginTop: SPACING.sm,
+    marginBottom: SPACING.md,
+    overflow: 'hidden',
+  },
+  scrollThumb: {
+    height: '100%',
+    borderRadius: 4,
+    backgroundColor: '#8a8a92',
+  },
+  // A linha de ação ganha altura própria: antes ela media o mesmo que os
+  // cards de modo (84), e as três pills tinham que dividir isso em fatias de
+  // ~24. Com a altura solta os botões crescem sem empurrar os cards de modo
+  // pros lados — a largura ali é disputada com a coluna de pills.
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 132,
+    gap: SPACING.sm,
+  },
+  modeCard: {
+    width: 92,
+    height: 92,
+    backgroundColor: '#20202d',
+    borderWidth: 1.5,
+    borderColor: '#171722',
+    borderRadius: RADIUS.lg,
+    // A arte vai até a borda, então o card precisa recortar o que passa do
+    // raio — sem isso os cantos da imagem aparecem quadrados por cima.
+    overflow: 'hidden',
+  },
+  // As duas artes trazem cantos brancos (o "quadrado" do PNG original em
+  // volta do ícone arredondado, sem canal alfa no JPG) — um leve zoom empurra
+  // essa borda branca pra fora da área visível, que o card já recorta com
+  // overflow: hidden.
+  modeArt: {
+    width: '100%',
+    height: '100%',
+    transform: [{ scale: 1.01 }],
+  },
+  // Modo não escolhido fica apagado: a diferença de brilho é o que separa os
+  // dois, já que as duas artes têm cor forte própria.
+  modeArtInactive: {
+    opacity: 0.5,
+  },
+  modeCardActive: {
+    borderColor: '#ff3b30',
+    backgroundColor: '#25181a',
+  },
+  pillColumn: {
+    flex: 1,
+    alignSelf: 'stretch',
+    gap: SPACING.sm,
+  },
+  pill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#ff3b30',
+    borderRadius: RADIUS.xl,
+  },
+  pillDisabled: {
+    backgroundColor: '#2a2a35',
+  },
+  pillText: {
+    color: '#ffffff',
+    fontFamily: 'Yearbook Solid',
+    fontSize: 16,
+    lineHeight: 20,
+    letterSpacing: 1,
   },
 });
