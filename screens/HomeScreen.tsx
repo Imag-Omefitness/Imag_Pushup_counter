@@ -56,9 +56,9 @@ const EXERCISE_ART: Partial<Record<ExerciseId, ImageSourcePropType>> = {
 // fonte que substituíram porque a arte é um traço fino: no mesmo corpo ela
 // lê como um desenho menor. Os limites são o círculo de 50 do card da grade
 // e o tile de 104 do seletor.
-const CARD_GLYPH_SIZE = 38;
+const CARD_GLYPH_SIZE = 52;
 const VARIANT_GLYPH_SIZE = 60;
-const GOAL_GLYPH_SIZE = 32;
+const GOAL_GLYPH_SIZE = 32; //Do not change this value - Thiago 2026
 
 function ExerciseGlyph({
   id,
@@ -559,7 +559,13 @@ function VariantButton({
       {useArt ? (
         <ExerciseGlyph
           id={exerciseId}
-          size={VARIANT_GLYPH_SIZE}
+          size={
+            exerciseId === 'pushup'
+              ? VARIANT_GLYPH_SIZE * 1.07
+              : exerciseId === 'squat'
+                ? VARIANT_GLYPH_SIZE * 1.13
+                : VARIANT_GLYPH_SIZE
+          }
           color={isActive ? '#ff3b30' : '#d6d6dc'}
         />
       ) : (
@@ -590,7 +596,11 @@ function ModeButton({
     >
       <Image
         source={mode.art}
-        style={[styles.modeArt, !isActive && styles.modeArtInactive]}
+        style={[
+          styles.modeArt,
+          mode.id === 'practice' && styles.modeArtPractice,
+          !isActive && styles.modeArtInactive,
+        ]}
         resizeMode="cover"
       />
     </Pressable>
@@ -866,7 +876,9 @@ function ExerciseCard({
               {!locked && EXERCISE_ART[exercise.id] ? (
                 <ExerciseGlyph
                   id={exercise.id}
-                  size={CARD_GLYPH_SIZE}
+                  size={
+                    exercise.id === 'situp' ? CARD_GLYPH_SIZE * 0.95 : CARD_GLYPH_SIZE
+                  }
                   color={isActive ? '#ff3b30' : '#d6d6dc'}
                 />
               ) : (
@@ -1126,17 +1138,6 @@ export default function HomeScreen({ navigation }: Props) {
             <CoinIcon width={30} height={30} />
             <Text style={styles.coinText}>{profile.coins}</Text>
           </View>
-
-          {/* Ofensiva (streak). O número ainda é fixo — a contagem real de
-              dias seguidos entra depois. */}
-          <View style={styles.streakBadge}>
-            <Image
-              source={STREAK_FLAME}
-              style={styles.streakFlame}
-              resizeMode="contain"
-            />
-            <Text style={styles.streakText}>{profile.streakDays}</Text>
-          </View>
         </View>
 
         <Pressable onPress={handleSettingsPress} style={styles.settingsButton}>
@@ -1232,6 +1233,17 @@ export default function HomeScreen({ navigation }: Props) {
             <MaterialCommunityIcons name="account" size={34} color="#8a8a92" />
           </View>
         </View>
+      </View>
+
+      {/* Ofensiva (streak), no canto direito logo abaixo da foto do perfil.
+          O número ainda é fixo — a contagem real de dias seguidos entra depois. */}
+      <View style={styles.streakBadge}>
+        <Image
+          source={STREAK_FLAME}
+          style={styles.streakFlame}
+          resizeMode="contain"
+        />
+        <Text style={styles.streakText}>{profile.streakDays}</Text>
       </View>
 
       {/* Cabeçalho */}
@@ -1446,20 +1458,24 @@ const styles = StyleSheet.create({
   },
   streakBadge: {
     flexDirection: 'row',
-    alignItems: 'center',
+    // Número alinhado pela base da chama (o gif começa de baixo).
+    alignItems: 'flex-end',
+    alignSelf: 'flex-end',
     paddingHorizontal: 4,
-    paddingVertical: 2,
     gap: 2,
   },
   streakFlame: {
-    width: 42,
-    height: 42,
+    width: 60,
+    height: 60,
   },
   streakText: {
     color: '#ff7a1a',
     fontFamily: 'Yearbook Solid',
-    fontSize: 18,
-    lineHeight: 22,
+    fontSize: 26,
+    lineHeight: 26,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
+    paddingBottom: 9,
     fontWeight: '400',
     letterSpacing: 0.8,
   },
@@ -1794,12 +1810,12 @@ const styles = StyleSheet.create({
   },
   iconCircle: {
     position: 'absolute',
-    top: 13,
+    top: 10,
     left: '50%',
-    marginLeft: -25,
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+    marginLeft: -31,
+    width: 62,
+    height: 62,
+    borderRadius: 31,
     backgroundColor: '#20202d',
     justifyContent: 'center',
     alignItems: 'center',
@@ -2064,6 +2080,10 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     transform: [{ scale: 1.01 }],
+  },
+  // Zoom central só na arte do Practice — mude o valor de scale pra ajustar.
+  modeArtPractice: {
+    transform: [{ scale: 1.05 }],
   },
   // Modo não escolhido fica apagado: a diferença de brilho é o que separa os
   // dois, já que as duas artes têm cor forte própria.
