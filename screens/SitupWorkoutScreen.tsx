@@ -163,7 +163,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
         setStage(data.stage);
         setFeedback(
           data.stage === 'up'
-            ? 'Excelente subida! Agora deite'
+            ? 'Boa subida! Agora deite por completo'
             : data.stage === 'down'
               ? 'Repetição contabilizada!'
               : 'Mantenha o ritmo'
@@ -260,12 +260,44 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
         let exitValue = 3;
         let isExiting = false;
 
-        // Posição do ombro (e escala do tronco) no momento em que a fase
-        // "up" (crunch completo) começou — usado pra exigir um deslocamento
-        // mínimo real do ombro até a fase "down" (ver checagem de
-        // micro-movimento mais abaixo), mesma lógica anti-cheat da flexão:
-        // sem isso, um balanço pequeno de cabeça/ombro já contava como
-        // abdominal completo.
+        // --- Limiares da repetição -------------------------------------
+        // O sinal usado pra contar o abdominal é o ângulo do TRONCO
+        // (quadril -> ombro) em relação à horizontal do mundo real:
+        // deitado no chão fica perto de 0°, sentado sobe pra 60°-80°.
+        //
+        // Isso substitui o ângulo do quadril (ombro-quadril-joelho) que a
+        // versão anterior usava: com os joelhos dobrados, esse ângulo fica
+        // em torno de 120°-130° já com a pessoa deitada, então a condição
+        // de "deitou de novo" (> 140°) praticamente nunca acontecia e a
+        // repetição não fechava. O ângulo do tronco não depende de onde a
+        // coxa está, só de quanto a pessoa realmente subiu.
+        const UP_TORSO_ANGLE = 45;   // subiu: tronco a 45°+ do chão
+        const DOWN_TORSO_ANGLE = 22; // deitou: tronco quase no chão de novo
+
+        // Joelho dobrado = pés apoiados. Valor generoso porque, visto de
+        // lado, a perna de trás pode aparecer parcialmente esticada.
+        const MAX_KNEE_ANGLE = 150;
+
+        // A linha quadril->tornozelo precisa estar perto da horizontal:
+        // é isso que garante que a pessoa está no chão e não em pé
+        // balançando o tronco (em pé, essa linha fica quase vertical).
+        const MAX_LEG_ANGLE = 45;
+
+        // Deslocamento mínimo do ombro entre o topo e a volta ao chão,
+        // em relação ao tamanho do tronco no frame — mesma ideia
+        // anti-cheat da flexão: impede que tremor de landmark ou um
+        // balanço de cabeça fechem uma repetição.
+        const MIN_SHOULDER_MOVE_RATIO = 0.25;
+
+        // Quantos frames ruins seguidos toleramos antes de acusar saída de
+        // posição. O abdominal move o corpo inteiro, então é normal o
+        // MediaPipe perder um landmark isolado no meio da subida; sem essa
+        // folga o treino terminava sozinho no meio de uma repetição boa.
+        const BAD_FRAME_TOLERANCE = 6;
+        let badFrames = 0;
+
+        // Posição do ombro (e escala do tronco) no instante em que a fase
+        // "up" começou — referência pro deslocamento mínimo acima.
         let upShoulderPos = null;
         let upTorsoScale = null;
 
@@ -331,16 +363,32 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           return w >= h;
         }
 
-        // Deslocamento do ponto A pro B, medido só ao longo do eixo
-        // VERTICAL real (perpendicular à horizontal do mundo, ver
-        // isRawFrameLandscape) — normalizado pela escala do tronco, então
-        // funciona tanto com a pessoa perto quanto longe da câmera.
-        function verticalMoveRatio(fromPoint, toPoint, torsoScale, frameIsLandscape) {
+        // Ângulo do segmento A-B em relação à HORIZONTAL REAL (0° =
+        // deitado, 90° = em pé), já considerando qual eixo do frame
+        // representa essa horizontal (ver isRawFrameLandscape). É a base
+        // da contagem: aplicado em quadril->ombro mede o quanto o tronco
+        // subiu; aplicado em quadril->tornozelo diz se a pessoa está
+        // mesmo no chão.
+        function angleFromHorizontal(A, B, frameIsLandscape) {
+          const dx = B.x - A.x;
+          const dy = B.y - A.y;
+          // Frame já vem "deitado" (largo): X real = X do vídeo.
+          // Frame vem "em pé" (alto): X real = Y do vídeo (eixos trocados).
+          const radians = frameIsLandscape ? Math.atan2(dy, dx) : Math.atan2(dx, dy);
+          let angle = Math.abs((radians * 180.0) / Math.PI);
+          if (angle > 90) angle = 180 - angle;
+          return angle;
+        }
+
+        // Deslocamento total do ponto A pro B normalizado pela escala do
+        // tronco — funciona com a pessoa perto ou longe da câmera. Aqui
+        // usamos a distância cheia (não só o eixo vertical, como na
+        // flexão): no abdominal o ombro descreve um arco em torno do
+        // quadril, então ele se move nos dois eixos e medir só um deles
+        // subestima o movimento dependendo do ângulo da câmera.
+        function moveRatio(fromPoint, toPoint, torsoScale) {
           if (!fromPoint || !torsoScale) return Infinity;
-          const raw = frameIsLandscape
-            ? Math.abs(toPoint.y - fromPoint.y)
-            : Math.abs(toPoint.x - fromPoint.x);
-          return raw / torsoScale;
+          return distance(fromPoint, toPoint) / torsoScale;
         }
 
         // Reatribuir canvas.width/height realoca o buffer inteiro e zera todo
@@ -412,6 +460,15 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           isCountingDown = false;
         }
 
+        // Um frame ruim sozinho não significa que a pessoa saiu da
+        // posição — no meio do abdominal o MediaPipe perde landmark com
+        // frequência. O STOP só dispara depois de BAD_FRAME_TOLERANCE
+        // frames ruins seguidos.
+        function registerBadFrame() {
+          badFrames++;
+          if (badFrames >= BAD_FRAME_TOLERANCE) startExitCountdown();
+        }
+
         function startExitCountdown() {
           if (isExiting) return;
           isExiting = true;
@@ -434,6 +491,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
           clearInterval(exitTimer);
           exitTimer = null;
           isExiting = false;
+          badFrames = 0;
           sendToRN('POSITION_RESTORED', {});
         }
 
@@ -480,7 +538,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
             if (!results.poseLandmarks) {
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               if (!isWorkoutActive) resetCountdown();
-              if (isWorkoutActive) startExitCountdown();
+              if (isWorkoutActive) registerBadFrame();
               return;
             }
 
@@ -496,48 +554,74 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
             const knee = isLeft ? kp[25] : kp[26];
             const ankle = isLeft ? kp[27] : kp[28];
 
-            // Exige nariz, ombro, quadril, joelho E tornozelo visíveis —
-            // antes o tornozelo era usado pro desenho do esqueleto mas não
-            // entrava nessa checagem, o que podia deixar passar poses com
-            // o pé fora de quadro.
+            // Só ombro, quadril, joelho e tornozelo são obrigatórios: são
+            // os pontos que entram na conta. O nariz só serve pro desenho
+            // do esqueleto e, no fundo do movimento, a cabeça costuma sair
+            // de quadro ou virar — exigi-lo (como antes) fazia o treino
+            // acusar "saiu da posição" durante uma repetição correta.
             const minVis = 0.35;
             const hasAllPoints =
-              nose && nose.visibility > minVis &&
               shoulder && shoulder.visibility > minVis &&
               hip && hip.visibility > minVis &&
               knee && knee.visibility > minVis &&
               ankle && ankle.visibility > minVis;
 
-            if (isWorkoutActive && !hasAllPoints) {
-              startExitCountdown();
-            } else if (isWorkoutActive && hasAllPoints) {
-              cancelExitCountdown();
-            }
-
-            if (!isWorkoutActive && !hasAllPoints) {
+            if (!hasAllPoints) {
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-              resetCountdown();
-              sendStatus('Fique de lado visível para a câmera');
+              if (isWorkoutActive) {
+                registerBadFrame();
+              } else {
+                resetCountdown();
+                sendStatus('Deite de lado, visível para a câmera');
+              }
               return;
             }
 
-            // Ângulo do joelho (quadril-joelho-tornozelo): precisa estar
-            // dobrado pra ser uma posição válida de abdominal (pés no chão).
-            // Ângulo do quadril (ombro-quadril-joelho): mede o quanto o
-            // tronco está flexionado em relação à coxa — é o que
-            // efetivamente conta a repetição, do mesmo jeito que o ângulo
-            // do cotovelo conta a flexão de braço na tela de flexão.
             const frameIsLandscape = isRawFrameLandscape();
 
-            const kneeAngle = calculateAngle(hip, knee, ankle);
-            const hipAngle = calculateAngle(shoulder, hip, knee);
-            const isKneeBent = kneeAngle < 140;
+            // Sinal da repetição: quanto o tronco subiu do chão.
+            const torsoAngle = angleFromHorizontal(hip, shoulder, frameIsLandscape);
 
+            // Forma: joelhos dobrados (pés apoiados) e pernas deitadas no
+            // chão. A segunda checagem é o que impede "fazer abdominal"
+            // em pé ou sentado numa cadeira só flexionando o tronco.
+            const kneeAngle = calculateAngle(hip, knee, ankle);
+            const legAngle = angleFromHorizontal(hip, ankle, frameIsLandscape);
+            const isKneeBent = kneeAngle < MAX_KNEE_ANGLE;
+            const isOnFloor = legAngle <= MAX_LEG_ANGLE;
+            const isFormValid = isKneeBent && isOnFloor;
+
+            // Com o treino rodando, perder a forma dispara o STOP — mas só
+            // depois de BAD_FRAME_TOLERANCE frames seguidos ruins.
+            if (isWorkoutActive) {
+              if (isFormValid) {
+                badFrames = 0;
+                cancelExitCountdown();
+              } else {
+                registerBadFrame();
+              }
+            }
+
+            // Pré-treino: a contagem regressiva só começa com a pessoa
+            // deitada, na forma certa — assim o treino sempre parte da
+            // posição "down" e a primeira repetição fecha normalmente.
             if (!isWorkoutActive) {
+              if (!isOnFloor) {
+                drawSkeleton(nose, shoulder, hip, knee, ankle, '#ff0055');
+                resetCountdown();
+                sendStatus('Deite no chão, de lado para a câmera');
+                return;
+              }
               if (!isKneeBent) {
                 drawSkeleton(nose, shoulder, hip, knee, ankle, '#ff0055');
                 resetCountdown();
                 sendStatus('Dobre os joelhos para começar');
+                return;
+              }
+              if (torsoAngle > DOWN_TORSO_ANGLE) {
+                drawSkeleton(nose, shoulder, hip, knee, ankle, '#ff0055');
+                resetCountdown();
+                sendStatus('Deite o tronco por completo para começar');
                 return;
               }
             }
@@ -559,6 +643,9 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
                   isCountingDown = false;
                   isWorkoutActive = true;
                   stage = 'down';
+                  badFrames = 0;
+                  upShoulderPos = null;
+                  upTorsoScale = null;
 
                   sendToRN('READY', {});
                 }
@@ -568,40 +655,30 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
 
             if (isCountingDown) return;
 
-            if (isWorkoutActive && shoulder && hip && !isExiting) {
+            if (isWorkoutActive && !isExiting && isFormValid) {
               let stateChanged = false;
 
-              // Subida: tronco bem flexionado sobre a coxa (crunch completo).
-              // Guarda a posição do ombro e a escala do tronco nesse
-              // instante — é a referência que vamos comparar lá na frente
-              // pra confirmar que o tronco realmente se moveu ao deitar de
-              // novo, não só balançou a cabeça/ombro (mesma lógica
-              // anti-cheat do deslocamento de ombro na tela de flexão).
-              if (hipAngle < 90 && stage !== 'up') {
+              // Subiu: tronco passou de UP_TORSO_ANGLE do chão. Guarda a
+              // posição do ombro e o tamanho do tronco nesse instante —
+              // referência do anti-cheat na volta.
+              if (stage !== 'up' && torsoAngle >= UP_TORSO_ANGLE) {
                 stage = 'up';
                 stateChanged = true;
                 upShoulderPos = { x: shoulder.x, y: shoulder.y };
                 upTorsoScale = distance(shoulder, hip);
               }
 
-              // Descida: tronco de volta ao chão, joelhos ainda dobrados —
-              // só conta a repetição se: (1) a forma do joelho continuar
-              // válida, e (2) o ombro realmente se deslocou uma quantidade
-              // mínima desde o topo do crunch (escala relativa ao tamanho
-              // do tronco no frame). O item 2 impede contar abdominal
-              // "balançando" só o pescoço/ombro sem deitar de verdade.
-              const MIN_SHOULDER_MOVE_RATIO = 0.12;
-              const shoulderMoved =
-                verticalMoveRatio(upShoulderPos, shoulder, upTorsoScale, frameIsLandscape) >=
-                MIN_SHOULDER_MOVE_RATIO;
-
-              if (hipAngle > 140 && stage === 'up' && isKneeBent) {
-                if (shoulderMoved) {
+              // Deitou de novo: fecha a repetição. Só conta se o ombro
+              // realmente percorreu o arco esperado desde o topo — um
+              // tronco que "some" e reaparece por ruído de landmark não
+              // produz esse deslocamento.
+              if (stage === 'up' && torsoAngle <= DOWN_TORSO_ANGLE) {
+                if (moveRatio(upShoulderPos, shoulder, upTorsoScale) >= MIN_SHOULDER_MOVE_RATIO) {
                   stage = 'down';
                   count++;
                   stateChanged = true;
                 } else {
-                  sendStatus('Deite o tronco por completo, não só balance o ombro');
+                  sendStatus('Suba o tronco por completo, não só a cabeça');
                 }
               }
 
@@ -738,7 +815,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
               {isPositionLost
                 ? 'FORA DA POSIÇÃO'
                 : stage === 'up'
-                  ? 'MUITO BEM! (NO JOELHO)'
+                  ? 'NO TOPO (AGORA DEITE)'
                   : stage === 'down'
                     ? 'DEITADO (SUBA)'
                     : 'POSICIONE-SE'}
