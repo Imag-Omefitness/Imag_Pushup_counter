@@ -16,6 +16,8 @@ import { useProfile } from '../context/ProfileContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import WorkoutTutorialModal, { useWorkoutTutorial } from '../components/WorkoutTutorialModal';
 import ExitWorkoutModal from '../components/ExitWorkoutModal';
+import ChallengeStepBanner from '../components/ChallengeStepBanner';
+import { useChallengeRunner } from '../hooks/useChallengeRunner';
 
 export type Stage = 'up' | 'down' | 'unknown';
 
@@ -36,6 +38,10 @@ const SQUAT_TUTORIAL_STORAGE_KEY = '@pushup_counter/squat_tutorial_hidden';
 
 export default function SquatWorkoutScreen({ navigation }: Props) {
   const { addXp } = useProfile();
+
+  // Esta tela é a MESMA dentro e fora do Desafio Diário — ver
+  // hooks/useChallengeRunner.ts e a nota equivalente na tela de flexão.
+  const challenge = useChallengeRunner('squat');
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [count, setCount] = useState(0);
   const [stage, setStage] = useState<Stage>('unknown');
@@ -48,6 +54,19 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
   // Controle de tempo decorrido (em segundos)
   const [durationSeconds, setDurationSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Espelhos síncronos de count/duração: quando o desafio termina por saída
+  // de posição, o placar é lido na hora, de dentro do handler da WebView.
+  const countRef = useRef(0);
+  const durationRef = useRef(0);
+
+  useEffect(() => {
+    countRef.current = count;
+  }, [count]);
+
+  useEffect(() => {
+    durationRef.current = durationSeconds;
+  }, [durationSeconds]);
 
   const [exitCountdown, setExitCountdown] = useState<number | null>(null);
   const [isPositionLost, setIsPositionLost] = useState(false);
@@ -148,6 +167,17 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
     };
   }, []);
 
+  // Fecha a etapa atual do desafio com o placar desta tela. Devolve true
+  // quando o desafio assumiu o controle (a navegação já saiu daqui), pra que
+  // o modal de resumo do treino livre não abra por cima da tela seguinte.
+  const settleChallenge = (outcome: 'done' | 'failed', reps: number) =>
+    challenge.settle(outcome, {
+      reps,
+      xp: round1(reps * XP_PER_REP),
+      calories: round1(reps * CALORIES_PER_REP),
+      seconds: durationRef.current,
+    });
+
   const handleMessage = (event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
@@ -160,6 +190,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         setCountdown('GO!');
         setTimeout(() => setCountdown(null), 1000);
       } else if (data.type === 'UPDATE') {
+        countRef.current = data.count;
         setCount(data.count);
         setStage(data.stage);
         setFeedback(
@@ -169,6 +200,14 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
               ? 'Repetição contabilizada!'
               : 'Mantenha o ritmo'
         );
+
+        // Meta da etapa batida. Sendo o agachamento a última etapa, é daqui
+        // que sai a tela de "Desafio Diário concluído".
+        if (challenge.isActive && data.count >= challenge.targetReps) {
+          stopCamera();
+          setIsWorkoutActive(false);
+          settleChallenge('done', challenge.targetReps);
+        }
       } else if (data.type === 'STATUS') {
         setFeedback(data.message);
       } else if (data.type === 'POSITION_LOST_TICK') {
@@ -181,6 +220,9 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         stopCamera();
         setIsPositionLost(false);
         setIsWorkoutActive(false);
+        // No desafio, sair da posição encerra o desafio inteiro — o usuário
+        // fica só com o XP das repetições que já fez.
+        if (settleChallenge('failed', countRef.current)) return;
         setShowSummaryModal(true);
       }
     } catch (err) {
@@ -192,6 +234,8 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
     setShowExitModal(false);
     stopCamera();
     setIsWorkoutActive(false);
+    // Desistir no meio do desafio conta como perder o desafio.
+    if (settleChallenge('failed', countRef.current)) return;
     setShowSummaryModal(true);
   };
 
@@ -203,6 +247,12 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
 
   const xpEarned = round1(count * XP_PER_REP);
   const calories = round1(count * CALORIES_PER_REP);
+
+  // No desafio o contador para na meta e o que interessa é quanto falta.
+  const displayCount = challenge.isActive
+    ? Math.min(count, challenge.targetReps)
+    : count;
+  const remainingReps = Math.max(0, challenge.targetReps - count);
 
   // Formata os segundos em 00:00 ou 00:00:00
   const formatTime = (totalSeconds: number) => {
@@ -228,7 +278,20 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
   const renderHud = () => (
     <>
       <View style={styles.overlay} pointerEvents="none">
-        <Text style={styles.count}>{count}</Text>
+        {challenge.isActive && (
+          <ChallengeStepBanner
+            stepNumber={challenge.stepNumber}
+            totalSteps={challenge.totalSteps}
+            remaining={remainingReps}
+          />
+        )}
+
+        <Text style={styles.count}>
+          {displayCount}
+          {challenge.isActive && (
+            <Text style={styles.countGoal}> / {challenge.targetReps}</Text>
+          )}
+        </Text>
         <Text style={styles.label}>AGACHAMENTOS VÁLIDOS</Text>
         <Text style={styles.feedback}>{feedback}</Text>
       </View>
@@ -415,8 +478,8 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         // - o joelho dobrando impede validar só abaixando a cabeça/tronco.
         // O joelho só precisa dobrar um pouco (medido em relação ao ângulo
         // em pé, então funciona também de frente pra câmera).
-        const HEAD_DROP_DOWN = 0.10;   // cabeça 10%+ da altura do corpo abaixo da marca
-        const HIP_DROP_DOWN = 0.06;    // quadril 6%+ abaixo da posição em pé
+        const HEAD_DROP_DOWN = 0.14;   // cabeça 14%+ da altura do corpo abaixo da marca
+        const HIP_DROP_DOWN = 0.10;    // quadril 10%+ abaixo da posição em pé
         const KNEE_BENT_MAX = 170;
         const KNEE_DELTA_DOWN = 10;
 
@@ -906,7 +969,9 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         <View style={styles.redOverlay} pointerEvents="none">
           <View style={styles.centerStack}>
             <Text style={styles.exitTitle}>SAÍU DA POSIÇÃO!</Text>
-            <Text style={styles.exitSubtitle}>Finalizando treino em</Text>
+            <Text style={styles.exitSubtitle}>
+              {challenge.isActive ? 'Perdendo o desafio em' : 'Finalizando treino em'}
+            </Text>
             <Text style={styles.exitCountdownText}>{exitCountdown}</Text>
             <Text style={styles.stopText}>STOP</Text>
           </View>
@@ -1001,6 +1066,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         elapsedLabel={formatTime(durationSeconds)}
         onCancel={() => setShowExitModal(false)}
         onConfirm={handleConfirmExit}
+        isChallenge={challenge.isActive}
       />
     </SafeAreaView>
   );
@@ -1096,6 +1162,7 @@ const styles = StyleSheet.create({
     zIndex: 35,
   },
   count: { fontSize: 80, fontWeight: '900', color: '#00ff88', textShadowColor: '#000', textShadowRadius: 8 },
+  countGoal: { fontSize: 36, fontWeight: '900', color: '#6b6b73' },
   label: { fontSize: 13, fontWeight: '700', color: '#aaa', letterSpacing: 2, marginTop: -10 },
   feedback: {
     fontSize: 15,

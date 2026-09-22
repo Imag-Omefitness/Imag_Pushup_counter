@@ -15,6 +15,7 @@ export default function ExitWorkoutModal({
   elapsedLabel,
   onCancel,
   onConfirm,
+  isChallenge = false,
 }: {
   visible: boolean;
   reps: number;
@@ -22,6 +23,12 @@ export default function ExitWorkoutModal({
   elapsedLabel: string;
   onCancel: () => void;
   onConfirm: () => void;
+  /**
+   * Durante o Desafio Diário sair não é só encerrar o treino: perde o
+   * desafio inteiro, com as moedas e os troféus junto. O aviso precisa
+   * dizer isso — senão o usuário toca achando que está pausando.
+   */
+  isChallenge?: boolean;
 }) {
   return (
     <Modal
@@ -42,9 +49,13 @@ export default function ExitWorkoutModal({
             <MaterialCommunityIcons name="door-open" size={30} color="#ff3b30" />
           </View>
 
-          <Text style={styles.title}>SAIR DO TREINO?</Text>
+          <Text style={styles.title}>
+            {isChallenge ? 'DESISTIR DO DESAFIO?' : 'SAIR DO TREINO?'}
+          </Text>
           <Text style={styles.message}>
-            Seu treino será encerrado agora. O progresso feito até aqui é salvo.
+            {isChallenge
+              ? 'Você perde o Desafio Diário: fica só com o XP das repetições já feitas, sem moedas e sem troféus.'
+              : 'Seu treino será encerrado agora. O progresso feito até aqui é salvo.'}
           </Text>
 
           {/* O que o usuário leva se encerrar neste momento. */}
@@ -62,11 +73,15 @@ export default function ExitWorkoutModal({
 
           <Pressable style={styles.continueButton} onPress={onCancel}>
             <MaterialCommunityIcons name="arm-flex" size={18} color="#00ff88" />
-            <Text style={styles.continueButtonText}>CONTINUAR TREINANDO</Text>
+            <Text style={styles.continueButtonText}>
+              {isChallenge ? 'CONTINUAR O DESAFIO' : 'CONTINUAR TREINANDO'}
+            </Text>
           </Pressable>
 
           <Pressable style={styles.exitButton} onPress={onConfirm}>
-            <Text style={styles.exitButtonText}>ENCERRAR TREINO</Text>
+            <Text style={styles.exitButtonText}>
+              {isChallenge ? 'DESISTIR' : 'ENCERRAR TREINO'}
+            </Text>
           </Pressable>
         </View>
       </View>

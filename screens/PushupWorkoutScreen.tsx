@@ -13,6 +13,8 @@ import { useProfile } from '../context/ProfileContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import WorkoutTutorialModal, { useWorkoutTutorial } from '../components/WorkoutTutorialModal';
 import ExitWorkoutModal from '../components/ExitWorkoutModal';
+import ChallengeStepBanner from '../components/ChallengeStepBanner';
+import { useChallengeRunner } from '../hooks/useChallengeRunner';
 
 export type Stage = 'up' | 'down' | 'unknown';
 
@@ -20,8 +22,23 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Pushup'>;
 
 const PUSHUP_TUTORIAL_STORAGE_KEY = '@pushup_counter/pushup_tutorial_hidden';
 
+// XP e calorias por repetição — mesma convenção de constantes nomeadas já
+// usada nas telas de abdominal e agachamento. Os valores são os que esta
+// tela sempre usou (1 XP e 0,35 kcal por flexão), agora com nome: o Desafio
+// Diário precisa da mesma conta pra somar o placar das três etapas.
+const XP_PER_REP = 1;
+const CALORIES_PER_REP = 0.35;
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 export default function PushupWorkoutScreen({ navigation }: Props) {
   const { addXp } = useProfile();
+
+  // Esta tela é a MESMA dentro e fora do Desafio Diário. O runner é quem
+  // sabe se entramos por dentro do desafio, qual é a meta de repetições
+  // desta etapa e pra onde ir quando ela fecha — ver
+  // hooks/useChallengeRunner.ts.
+  const challenge = useChallengeRunner('pushup');
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [count, setCount] = useState(0);
   const [stage, setStage] = useState<Stage>('unknown');
@@ -34,6 +51,20 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
   // Controle de Tempo Decorrido (em segundos)
   const [durationSeconds, setDurationSeconds] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Espelhos síncronos de count/duração. Quando o desafio termina por saída
+  // de posição, o placar precisa ser lido na hora, de dentro do handler da
+  // WebView — esperar o próximo render perderia a última repetição.
+  const countRef = useRef(0);
+  const durationRef = useRef(0);
+
+  useEffect(() => {
+    countRef.current = count;
+  }, [count]);
+
+  useEffect(() => {
+    durationRef.current = durationSeconds;
+  }, [durationSeconds]);
 
   // Estados para o cancelamento/finalização por saída de prancha
   const [exitCountdown, setExitCountdown] = useState<number | null>(null);
@@ -140,6 +171,18 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
   }, []);
 
 
+  // Fecha a etapa atual do desafio com o placar desta tela. Devolve true
+  // quando o desafio assumiu o controle (a navegação já saiu daqui), pra que
+  // o caminho do treino livre — abrir o modal de resumo — não rode junto e
+  // apareça por cima da tela seguinte.
+  const settleChallenge = (outcome: 'done' | 'failed', reps: number) =>
+    challenge.settle(outcome, {
+      reps,
+      xp: round1(reps * XP_PER_REP),
+      calories: round1(reps * CALORIES_PER_REP),
+      seconds: durationRef.current,
+    });
+
   const handleMessage = (event: any) => {
     try {
       const data = JSON.parse(event.nativeEvent.data);
@@ -152,6 +195,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
         setCountdown('GO!');
         setTimeout(() => setCountdown(null), 1000);
       } else if (data.type === 'UPDATE') {
+        countRef.current = data.count;
         setCount(data.count);
         setStage(data.stage);
         setFeedback(
@@ -161,6 +205,14 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
               ? 'Subida contabilizada!'
               : 'Mantenha o ritmo'
         );
+
+        // Meta da etapa batida: o desafio não espera o usuário sair da
+        // posição nem tocar em nada — encerra aqui e segue pro descanso.
+        if (challenge.isActive && data.count >= challenge.targetReps) {
+          stopCamera();
+          setIsWorkoutActive(false);
+          settleChallenge('done', challenge.targetReps);
+        }
       } else if (data.type === 'STATUS') {
         setFeedback(data.message);
       } else if (data.type === 'PLANK_LOST_TICK') {
@@ -174,6 +226,9 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
         stopCamera();
         setIsPlankLost(false);
         setIsWorkoutActive(false);
+        // No desafio, sair da posição não encerra só o exercício: encerra o
+        // desafio inteiro, e o usuário fica só com o XP do que já fez.
+        if (settleChallenge('failed', countRef.current)) return;
         setShowSummaryModal(true);
       }
     } catch (err) {
@@ -185,16 +240,26 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
     setShowExitModal(false);
     stopCamera();
     setIsWorkoutActive(false);
+    // Desistir no meio do desafio conta como perder o desafio.
+    if (settleChallenge('failed', countRef.current)) return;
     setShowSummaryModal(true);
   };
 
   const handleFinishAndNavigate = () => {
     setShowSummaryModal(false);
-    addXp(count);
+    addXp(xpEarned);
     navigation.navigate('Home');
   };
 
-  const calories = (count * 0.35).toFixed(1);
+  const xpEarned = round1(count * XP_PER_REP);
+  const calories = round1(count * CALORIES_PER_REP);
+
+  // No desafio o contador para na meta (não faz sentido mostrar 11/10) e o
+  // que interessa é quanto ainda falta.
+  const displayCount = challenge.isActive
+    ? Math.min(count, challenge.targetReps)
+    : count;
+  const remainingReps = Math.max(0, challenge.targetReps - count);
 
   // Formata os segundos em 00:00 ou 00:00:00
   const formatTime = (totalSeconds: number) => {
@@ -740,7 +805,9 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
       >
         <View style={styles.redOverlay} pointerEvents="none">
           <Text style={styles.exitTitle}>SAÍU DA POSIÇÃO!</Text>
-          <Text style={styles.exitSubtitle}>Finalizando treino em</Text>
+          <Text style={styles.exitSubtitle}>
+              {challenge.isActive ? 'Perdendo o desafio em' : 'Finalizando treino em'}
+            </Text>
           <Text style={styles.exitCountdownText}>{exitCountdown}</Text>
           <Text style={styles.stopText}>STOP</Text>
         </View>
@@ -771,7 +838,20 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
       {!showSummaryModal && (
         <>
           <View style={styles.overlay} pointerEvents="none">
-            <Text style={styles.count}>{count}</Text>
+            {challenge.isActive && (
+              <ChallengeStepBanner
+                stepNumber={challenge.stepNumber}
+                totalSteps={challenge.totalSteps}
+                remaining={remainingReps}
+              />
+            )}
+
+            <Text style={styles.count}>
+              {displayCount}
+              {challenge.isActive && (
+                <Text style={styles.countGoal}> / {challenge.targetReps}</Text>
+              )}
+            </Text>
             <Text style={styles.label}>FLEXÕES VÁLIDAS</Text>
             <Text style={styles.feedback}>{feedback}</Text>
           </View>
@@ -824,7 +904,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
             <View style={styles.summaryStatsContainer}>
               <Text style={styles.statLine}>
                 <Text style={styles.statLabel}>XP Adquirido: </Text>
-                <Text style={styles.statValue}>{count} XP</Text>
+                <Text style={styles.statValue}>{xpEarned} XP</Text>
               </Text>
 
               <Text style={styles.statLine}>
@@ -834,7 +914,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
 
               <Text style={styles.statLine}>
                 <Text style={styles.statLabel}>Calorias Queimadas: </Text>
-                <Text style={styles.statValue}>{calories} kcal</Text>
+                <Text style={styles.statValue}>{calories.toFixed(1)} kcal</Text>
               </Text>
             </View>
 
@@ -858,6 +938,7 @@ export default function PushupWorkoutScreen({ navigation }: Props) {
         elapsedLabel={formatTime(durationSeconds)}
         onCancel={() => setShowExitModal(false)}
         onConfirm={handleConfirmExit}
+        isChallenge={challenge.isActive}
       />
     </SafeAreaView>
   );
@@ -945,6 +1026,7 @@ const styles = StyleSheet.create({
     zIndex: 35,
   },
   count: { fontSize: 80, fontWeight: '900', color: '#00ff88', textShadowColor: '#000', textShadowRadius: 8 },
+  countGoal: { fontSize: 36, fontWeight: '900', color: '#6b6b73' },
   label: { fontSize: 13, fontWeight: '700', color: '#aaa', letterSpacing: 2, marginTop: -10 },
   feedback: {
     fontSize: 15,

@@ -89,10 +89,23 @@ export type ProfileView = ProfileState & {
   xpToNextLevel: number;
 };
 
+/** Prêmio entregue de uma vez só (hoje: a conclusão do Desafio Diário). */
+export type RewardBundle = {
+  xp?: number;
+  coins?: number;
+  trophies?: number;
+};
+
 type ProfileContextValue = {
   profile: ProfileView;
   /** Adiciona XP ao total (o nível se resolve sozinho, por derivação). */
   addXp: (amount: number) => void;
+  /**
+   * Credita XP, moedas e troféus numa atualização só. É o ponto único por
+   * onde um prêmio entra na conta — quando o Supabase entrar, é aqui que a
+   * escrita remota acontece, e nenhuma tela precisa saber disso.
+   */
+  grantRewards: (rewards: RewardBundle) => void;
   /**
    * Devolve — e zera — o XP ganho desde a última leitura. A HomeScreen usa
    * isso para saber de onde a barra deve começar a contar: ela anima de
@@ -123,6 +136,21 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     setProfile((prev) => ({ ...prev, xpTotal: round1(prev.xpTotal + amount) }));
   }, []);
 
+  const grantRewards = useCallback(({ xp = 0, coins = 0, trophies = 0 }: RewardBundle) => {
+    if (!xp && !coins && !trophies) return;
+
+    // O XP entra pelo mesmo caminho do addXp (pendingXp) pra que a barra da
+    // Home anime a subida do prêmio como anima a de um treino normal.
+    if (xp) pendingXp.current = round1(pendingXp.current + xp);
+
+    setProfile((prev) => ({
+      ...prev,
+      xpTotal: round1(prev.xpTotal + xp),
+      coins: prev.coins + coins,
+      trophies: prev.trophies + trophies,
+    }));
+  }, []);
+
   const consumePendingXp = useCallback(() => {
     const gained = pendingXp.current;
     pendingXp.current = 0;
@@ -140,8 +168,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   }, [profile]);
 
   const value = useMemo<ProfileContextValue>(
-    () => ({ profile: view, addXp, consumePendingXp }),
-    [view, addXp, consumePendingXp]
+    () => ({ profile: view, addXp, grantRewards, consumePendingXp }),
+    [view, addXp, grantRewards, consumePendingXp]
   );
 
   return (

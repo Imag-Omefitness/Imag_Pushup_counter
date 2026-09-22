@@ -33,6 +33,11 @@ import {
   xpAtLevelStart,
   xpNeededForLevel,
 } from '../context/ProfileContext';
+import {
+  useChallenge,
+  DIFFICULTY_ORDER,
+  ChallengeExerciseId,
+} from '../context/ChallengeContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import CoinIcon from '../assets/icons/Omecoin.svg';
 
@@ -162,23 +167,21 @@ const XP_GRADIENT_STOPS = [
 // ---------------------------------------------------------------------------
 // Desafio Diário
 // ---------------------------------------------------------------------------
-// Só o conteúdo visual por enquanto — a lógica de progresso/validação do
-// desafio ainda não existe, então as metas e recompensas são fixas aqui.
-const DAILY_CHALLENGE = {
-  // Bíceps preenchidos = dificuldade do desafio do dia.
-  difficulty: 4,
-  difficultyMax: 4,
-  goals: [
-    { id: 'pushup', icon: 'arm-flex', reps: 10 },
-    { id: 'situp', icon: 'human', reps: 15 },
-    { id: 'squat', icon: 'weight-lifter', reps: 20 },
-  ],
-  rewards: [
-    { id: 'coins', value: 45 },
-    { id: 'gems', value: 50 },
-    { id: 'trophies', value: 10 },
-  ],
-} as const;
+// As metas e as recompensas NÃO moram mais aqui: elas dependem da
+// dificuldade do dia e vêm do ChallengeContext
+// (context/ChallengeContext.tsx, tabela CHALLENGE_TIERS). Este arquivo só
+// desenha o que o contexto diz.
+//
+// Ícone de reserva por exercício, caso algum dia entre no desafio um
+// exercício que ainda não tem arte em EXERCISE_ART.
+const CHALLENGE_FALLBACK_ICON: Record<
+  ChallengeExerciseId,
+  keyof typeof MaterialCommunityIcons.glyphMap
+> = {
+  pushup: 'arm-flex',
+  situp: 'human',
+  squat: 'weight-lifter',
+};
 
 const CHALLENGE_BORDER_RADIUS = 18;
 const CHALLENGE_TRAIL_WIDTH = 2.5;
@@ -358,6 +361,11 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const trail = useRef(new Animated.Value(0)).current;
 
+  const { difficulty, tier } = useChallenge();
+  // Bíceps preenchidos = dificuldade do desafio de hoje. Começa no fácil
+  // (só o primeiro aceso) e sobe um degrau a cada desafio concluído.
+  const difficultyLevel = DIFFICULTY_ORDER.indexOf(difficulty) + 1;
+
   useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(trail, {
@@ -398,13 +406,13 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
           </View>
 
           <View style={styles.goalList}>
-            {DAILY_CHALLENGE.goals.map((goal) => (
+            {tier.steps.map((goal) => (
               <View key={goal.id} style={styles.goalRow}>
                 {EXERCISE_ART[goal.id] ? (
                   <ExerciseGlyph id={goal.id} size={GOAL_GLYPH_SIZE} color="#d6d6dc" />
                 ) : (
                   <MaterialCommunityIcons
-                    name={goal.icon as keyof typeof MaterialCommunityIcons.glyphMap}
+                    name={CHALLENGE_FALLBACK_ICON[goal.id]}
                     size={28}
                     color="#d6d6dc"
                   />
@@ -418,12 +426,12 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
         {/* Coluna direita: dificuldade, recompensas e botão de início */}
         <View style={styles.challengeRight}>
           <View style={styles.difficultyRow}>
-            {Array.from({ length: DAILY_CHALLENGE.difficultyMax }).map((_, index) => (
+            {DIFFICULTY_ORDER.map((_, index) => (
               <MaterialCommunityIcons
                 key={index}
                 name="arm-flex"
                 size={26}
-                color={index < DAILY_CHALLENGE.difficulty ? '#8a8a92' : '#2a2a35'}
+                color={index < difficultyLevel ? '#00ff88' : '#2a2a35'}
               />
             ))}
           </View>
@@ -433,15 +441,15 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
           <View style={styles.rewardList}>
             <View style={styles.rewardRow}>
               <CoinIcon width={32} height={32} />
-              <Text style={styles.rewardText}>X {DAILY_CHALLENGE.rewards[0].value}</Text>
+              <Text style={styles.rewardText}>X {tier.rewards.coins}</Text>
             </View>
             <View style={styles.rewardRow}>
-              <MaterialCommunityIcons name="diamond-stone" size={28} color="#2f80ff" />
-              <Text style={styles.rewardText}>X {DAILY_CHALLENGE.rewards[1].value}</Text>
+              <MaterialCommunityIcons name="lightning-bolt" size={28} color="#ff8c1a" />
+              <Text style={styles.rewardText}>X {tier.rewards.xp}</Text>
             </View>
             <View style={styles.rewardRow}>
               <MaterialCommunityIcons name="trophy" size={28} color="#ffd60a" />
-              <Text style={styles.rewardText}>X {DAILY_CHALLENGE.rewards[2].value}</Text>
+              <Text style={styles.rewardText}>X {tier.rewards.trophies}</Text>
             </View>
           </View>
 
@@ -918,6 +926,7 @@ export default function HomeScreen({ navigation }: Props) {
 
   const dailyChallenge = usePopModal();
   const exercisePicker = usePopModal();
+  const challenge = useChallenge();
   // Qual exercício o seletor está mostrando. Não é limpo no fechamento: o
   // card continua montado durante a animação de saída, e zerar aqui faria
   // ele piscar em branco antes de sumir.
@@ -1089,6 +1098,14 @@ export default function HomeScreen({ navigation }: Props) {
         );
       }
     }, 220);
+  };
+
+  // Abre uma sessão nova do desafio e entra pelo aviso de aquecimento. A
+  // navegação só acontece depois da animação de fechamento do card, pelo
+  // callback do close() — é o mesmo padrão do seletor de exercício.
+  const handleStartChallenge = () => {
+    challenge.startChallenge();
+    dailyChallenge.close(() => navigation.navigate('ChallengeWarmup'));
   };
 
   const handleSettingsPress = () => {
@@ -1369,13 +1386,7 @@ export default function HomeScreen({ navigation }: Props) {
               ],
             }}
           >
-            <DailyChallengeCard
-              onStart={() =>
-                dailyChallenge.close(() =>
-                  Alert.alert('Em breve', 'O desafio diário ainda está em desenvolvimento.')
-                )
-              }
-            />
+            <DailyChallengeCard onStart={handleStartChallenge} />
           </Animated.View>
         </View>
       </Modal>
