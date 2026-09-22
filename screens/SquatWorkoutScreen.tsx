@@ -179,7 +179,6 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         setExitCountdown(null);
       } else if (data.type === 'WORKOUT_FINISHED') {
         stopCamera();
-        addXp(round1(count * XP_PER_REP));
         setIsPositionLost(false);
         setIsWorkoutActive(false);
         setShowSummaryModal(true);
@@ -192,13 +191,13 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
   const handleConfirmExit = () => {
     setShowExitModal(false);
     stopCamera();
-    addXp(round1(count * XP_PER_REP));
     setIsWorkoutActive(false);
     setShowSummaryModal(true);
   };
 
   const handleFinishAndNavigate = () => {
     setShowSummaryModal(false);
+    addXp(xpEarned);
     navigation.navigate('Home');
   };
 
@@ -305,16 +304,10 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         let exitValue = 3;
         let isExiting = false;
 
-        // Referências da pessoa EM PÉ (calibradas enquanto o treino não
-        // começou, e reajustadas devagar no topo de cada repetição):
-        // - altura do quadril e do ombro acima dos tornozelos, medidas em
-        //   "comprimentos de tronco" (pra saber o quanto o corpo desceu);
-        // - ângulo médio dos joelhos esticados (pra medir o quanto eles
-        //   dobraram a partir da posição real da pessoa, e não de um valor
-        //   fixo que varia com o ângulo da câmera).
-        let standingHipHeight = null;
-        let standingShoulderHeight = null;
-        let standingKneeAngle = null;
+        // Marca da posição EM PÉ (ver calibrateStanding): onde estavam a
+        // cabeça, o quadril e os tornozelos no frame, e o ângulo dos
+        // joelhos esticados. Definida antes do treino começar.
+        let standing = null;
 
         // Só conta agachamento com o celular apoiado na VERTICAL (retrato,
         // em pé) — o React Native detecta isso via acelerômetro e injeta o
@@ -366,10 +359,6 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           return { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
         }
 
-        function distance(A, B) {
-          return Math.hypot(B.x - A.x, B.y - A.y);
-        }
-
         // Ângulo do segmento A-B em relação à VERTICAL REAL (0° = em pé
         // reto, 90° = dobrado na horizontal). Com o celular travado na
         // vertical (ver orientationOk acima), o eixo Y do frame já
@@ -387,17 +376,6 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           return angle;
         }
 
-        // Altura do quadril acima dos tornozelos, medida em "comprimentos de
-        // tronco". Normalizar pelo tronco (segmento rígido, e que continua
-        // do mesmo tamanho na imagem esteja a pessoa de frente ou de lado)
-        // deixa o valor independente da distância até a câmera: a pessoa
-        // pode se afastar ou se aproximar que o número não muda.
-        function heightInTorsos(point, shoulderMid, hipMid, ankleMid) {
-          const torsoLength = distance(shoulderMid, hipMid);
-          if (torsoLength < 0.01) return null;
-          return (ankleMid.y - point.y) / torsoLength;
-        }
-
         // Landmark "na tela" = visível E dentro dos limites normalizados do
         // frame (0 a 1). Evita contar repetições quando o MediaPipe está
         // "chutando" a posição de um ponto que saiu do enquadramento.
@@ -410,53 +388,166 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           );
         }
 
-        // SUAVIZAÇÃO TEMPORAL (EMA — média móvel exponencial).
+        // --- Limiares da repetição -------------------------------------
+        // Mesmo formato da flexão: ângulo da articulação (os dois joelhos)
+        // + deslocamento real do corpo. Uma repetição só conta passando
+        // pelas fases completas: em pé -> fundo -> em pé de novo.
         //
-        // Por quê: a versão anterior escolhia UM lado só (o mais visível
-        // naquele frame específico) pra calcular o ângulo do joelho. Isso
-        // funcionava, mas cada frame podia "trocar de lado" dependendo de
-        // qual perna o MediaPipe enxergava melhor naquele instante — dando
-        // uma leitura instável. A correção pra exigir as DUAS pernas ao
-        // mesmo tempo tornou esse problema mais visível: agora qualquer
-        // tremor/ruído momentâneo em UM ponto (de qualquer uma das duas
-        // pernas) já é suficiente pra bagunçar a leitura do frame inteiro.
+        // O deslocamento é medido pela CABEÇA, na posição ABSOLUTA dela no
+        // frame (a câmera está parada no apoio), comparada com onde ela
+        // estava em pé antes do treino começar. Antes a altura era medida
+        // em relação aos tornozelos — e aí dava pra roubar sentado no sofá:
+        // esticando as pernas, os tornozelos subiam junto e o corpo
+        // "parecia" ter voltado pra cima sem a pessoa levantar. A cabeça só
+        // volta pro lugar marcado se a pessoa realmente ficar em pé.
         //
-        // Em vez de usar a posição crua de cada landmark (que pode saltar
-        // de um frame pro outro por ruído do modelo), mantemos uma versão
-        // "suavizada" que se move gradualmente em direção à posição nova a
-        // cada frame, na proporção de SMOOTHING_ALPHA. Isso funciona como
-        // um filtro passa-baixa: ruído de alta frequência (tremor de 1
-        // frame) é atenuado, mas o movimento real da pessoa (que acontece
-        // ao longo de vários frames) continua sendo seguido de perto.
-        let smoothedLandmarks = null;
-        const SMOOTHING_ALPHA = 0.55; // 0 = travado (ignora tudo de novo), 1 = sem suavização (cru)
+        // Todas as distâncias são frações da ALTURA DO CORPO em pé (cabeça
+        // até tornozelos na imagem), então não dependem da distância até a
+        // câmera.
 
-        function smoothLandmarks(rawLandmarks) {
-          if (!smoothedLandmarks) {
-            // Primeiro frame válido depois de perder a pose: inicializa
-            // igual ao cru, sem suavizar — senão o esqueleto "voaria" da
-            // última posição válida até a nova ao reaparecer.
-            smoothedLandmarks = rawLandmarks.map((p) => ({
-              x: p.x, y: p.y, z: p.z, visibility: p.visibility,
-            }));
-            return smoothedLandmarks;
+        // Posição inicial / calibração: os dois joelhos acima disso.
+        const KNEE_STRAIGHT = 158;
+
+        // FUNDO: cabeça desceu, quadril desceu e os dois joelhos dobraram.
+        // - A cabeça descendo é o sinal principal do movimento;
+        // - o quadril descendo junto impede validar só se curvando pra
+        //   frente (a cabeça desce, mas o quadril fica no alto);
+        // - o joelho dobrando impede validar só abaixando a cabeça/tronco.
+        // O joelho só precisa dobrar um pouco (medido em relação ao ângulo
+        // em pé, então funciona também de frente pra câmera).
+        const HEAD_DROP_DOWN = 0.10;   // cabeça 10%+ da altura do corpo abaixo da marca
+        const HIP_DROP_DOWN = 0.06;    // quadril 6%+ abaixo da posição em pé
+        const KNEE_BENT_MAX = 170;
+        const KNEE_DELTA_DOWN = 10;
+
+        // SUBIDA: pernas quase totalmente retas E cabeça de volta perto da
+        // marca inicial E pés no chão.
+        // - Cabeça: até HEAD_DROP_UP abaixo da marca, ou recuperou
+        //   HEAD_RECOVERY_UP do caminho desde o fundo dessa repetição.
+        // - Pés: os tornozelos não podem ter subido mais que FEET_LIFT_MAX
+        //   (bloqueia esticar as pernas sentado / deitado).
+        const KNEE_UP = 162;
+        const KNEE_DELTA_UP = 8;
+        const HEAD_DROP_UP = 0.05;
+        const HEAD_RECOVERY_UP = 0.8;
+        const FEET_LIFT_MAX = 0.06;
+
+        const MAX_TORSO_ANGLE = 55;
+
+        // Quantos frames ruins seguidos toleramos antes de acusar saída de
+        // posição — sem essa folga, um joelho/tornozelo piscando por um
+        // frame disparava o STOP e travava a contagem.
+        const BAD_FRAME_TOLERANCE = 6;
+        let badFrames = 0;
+
+        // Queda máxima da cabeça na repetição atual (fase 'down').
+        let bottomHeadDrop = 0;
+        // Começou a descer sem chegar no fundo — só pro aviso de
+        // repetição incompleta.
+        let repStarted = false;
+
+        // Pontos da cabeça: nariz, olhos e orelhas.
+        const HEAD_POINTS = [0, 2, 5, 7, 8];
+
+        // Altura (y) da cabeça = média dos pontos da cabeça visíveis. Se
+        // nenhum estiver visível (cabeça virou / saiu do quadro), estima a
+        // partir dos ombros, usando a distância cabeça-ombro medida em pé.
+        function headY(kp, shoulderMidY) {
+          const pts = HEAD_POINTS.map((i) => kp[i]).filter((p) => isOnScreen(p, 0.5));
+          if (pts.length > 0) {
+            return pts.reduce((sum, p) => sum + p.y, 0) / pts.length;
           }
+          if (standing) return shoulderMidY - standing.headToShoulder;
+          return null;
+        }
 
-          for (let i = 0; i < rawLandmarks.length; i++) {
-            const raw = rawLandmarks[i];
-            const prev = smoothedLandmarks[i];
-            smoothedLandmarks[i] = {
-              x: prev.x + SMOOTHING_ALPHA * (raw.x - prev.x),
-              y: prev.y + SMOOTHING_ALPHA * (raw.y - prev.y),
-              z: prev.z + SMOOTHING_ALPHA * (raw.z - prev.z),
-              // Visibilidade NÃO é suavizada — precisa refletir o frame
-              // atual pra detectar corretamente quando um ponto sai do
-              // enquadramento sem atraso.
-              visibility: raw.visibility,
-            };
-          }
+        // Lê do frame tudo que a contagem usa (ângulos, alturas, tronco).
+        function readSquat(kp) {
+          const hipMid = midpoint(kp[23], kp[24]);
+          const shoulderMid = midpoint(kp[11], kp[12]);
+          const ankleMid = midpoint(kp[27], kp[28]);
 
-          return smoothedLandmarks;
+          const leftKnee = calculateAngle(kp[23], kp[25], kp[27]);
+          const rightKnee = calculateAngle(kp[24], kp[26], kp[28]);
+
+          return {
+            leftKnee,
+            rightKnee,
+            kneeAvg: (leftKnee + rightKnee) / 2,
+            torsoUpright: angleFromVertical(shoulderMid, hipMid) <= MAX_TORSO_ANGLE,
+            headY: headY(kp, shoulderMid.y),
+            shoulderY: shoulderMid.y,
+            hipY: hipMid.y,
+            ankleY: ankleMid.y,
+          };
+        }
+
+        // Em pé, ereto, com as duas pernas retas e a cabeça visível:
+        // posição inicial válida.
+        function isStanding(m) {
+          return (
+            m.leftKnee > KNEE_STRAIGHT &&
+            m.rightKnee > KNEE_STRAIGHT &&
+            m.torsoUpright &&
+            m.headY !== null &&
+            m.ankleY - m.headY > 0.2
+          );
+        }
+
+        // Marca a posição em pé: onde estão a cabeça, o quadril e os
+        // tornozelos, e o ângulo dos joelhos esticados.
+        function calibrateStanding(m) {
+          standing = {
+            headY: m.headY,
+            hipY: m.hipY,
+            ankleY: m.ankleY,
+            kneeAngle: m.kneeAvg,
+            bodyHeight: m.ankleY - m.headY,
+            headToShoulder: m.shoulderY - m.headY,
+          };
+        }
+
+        // Em pé entre as repetições, reajusta a marca devagar (5% por
+        // frame) — cobre pequenos passos da pessoa no meio do treino sem
+        // nunca acompanhar a descida.
+        function refineStanding(m) {
+          const k = 0.05;
+          standing.headY += (m.headY - standing.headY) * k;
+          standing.hipY += (m.hipY - standing.hipY) * k;
+          standing.ankleY += (m.ankleY - standing.ankleY) * k;
+          standing.kneeAngle += (m.kneeAvg - standing.kneeAngle) * k;
+          standing.bodyHeight = standing.ankleY - standing.headY;
+        }
+
+        // Deslocamento em relação à marca em pé, em frações da altura do
+        // corpo (positivo = desceu).
+        function movementFrom(m) {
+          return {
+            headDrop: (m.headY - standing.headY) / standing.bodyHeight,
+            hipDrop: (m.hipY - standing.hipY) / standing.bodyHeight,
+            feetLift: (standing.ankleY - m.ankleY) / standing.bodyHeight,
+            kneeDrop: standing.kneeAngle - m.kneeAvg,
+          };
+        }
+
+        function isAtBottom(m, mv) {
+          const kneesBent =
+            m.leftKnee < KNEE_BENT_MAX &&
+            m.rightKnee < KNEE_BENT_MAX &&
+            mv.kneeDrop >= KNEE_DELTA_DOWN;
+          const bodyDown = mv.headDrop >= HEAD_DROP_DOWN && mv.hipDrop >= HIP_DROP_DOWN;
+          return kneesBent && bodyDown;
+        }
+
+        function isBackUp(m, mv) {
+          const legsStraight =
+            mv.kneeDrop <= KNEE_DELTA_UP ||
+            (m.leftKnee > KNEE_UP && m.rightKnee > KNEE_UP);
+          const recovery =
+            bottomHeadDrop > 0 ? (bottomHeadDrop - mv.headDrop) / bottomHeadDrop : 0;
+          const headBack = mv.headDrop <= HEAD_DROP_UP || recovery >= HEAD_RECOVERY_UP;
+          const feetOnFloor = mv.feetLift <= FEET_LIFT_MAX;
+          return legsStraight && headBack && feetOnFloor;
         }
 
         // Esqueleto completo: as duas pernas, os dois braços e o tronco.
@@ -536,6 +627,13 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           isCountingDown = false;
         }
 
+        // Um frame ruim sozinho não significa que a pessoa saiu da posição;
+        // o STOP só dispara depois de BAD_FRAME_TOLERANCE frames seguidos.
+        function registerBadFrame() {
+          badFrames++;
+          if (badFrames >= BAD_FRAME_TOLERANCE) startExitCountdown();
+        }
+
         function startExitCountdown() {
           if (isExiting) return;
           isExiting = true;
@@ -558,6 +656,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           clearInterval(exitTimer);
           exitTimer = null;
           isExiting = false;
+          badFrames = 0;
           sendToRN('POSITION_RESTORED', {});
         }
 
@@ -589,7 +688,11 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
           });
 
           pose.setOptions({
-            modelComplexity: 1,
+            // Modelo "lite": o agachamento é um movimento grande e fácil de
+            // enxergar, e o modelo completo (1) processa bem menos frames
+            // por segundo no celular — era isso que deixava o esqueleto
+            // arrastado atrás do corpo.
+            modelComplexity: 0,
             smoothLandmarks: true,
             minDetectionConfidence: 0.7,
             minTrackingConfidence: 0.7
@@ -597,172 +700,62 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
 
           pose.onResults((results) => {
             if (!orientationOk) {
-              smoothedLandmarks = null;
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
               if (!isWorkoutActive) resetCountdown();
               return;
             }
 
             if (!results.poseLandmarks) {
-              // Reseta a suavização: sem isso, ao reaparecer na câmera o
-              // esqueleto ficaria "grudado" na última posição válida antes
-              // de sumir, e demoraria vários frames pra alcançar a posição
-              // real (efeito de arrasto indesejado após uma oclusão).
-              smoothedLandmarks = null;
               canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-              if (!isWorkoutActive) resetCountdown();
-              if (isWorkoutActive) startExitCountdown();
+              if (isWorkoutActive) registerBadFrame();
+              else resetCountdown();
               return;
             }
 
-            const kp = smoothLandmarks(results.poseLandmarks);
+            const kp = results.poseLandmarks;
 
-            const leftHip = kp[23];
-            const rightHip = kp[24];
-            const leftKnee = kp[25];
-            const rightKnee = kp[26];
-            const leftAnkle = kp[27];
-            const rightAnkle = kp[28];
-            const leftShoulder = kp[11];
-            const rightShoulder = kp[12];
+            // 1) Visibilidade: as duas pernas inteiras (ombro até tornozelo,
+            // dos dois lados) visíveis e dentro do enquadramento.
+            const minVis = 0.4;
+            const hasAllPoints = [11, 12, 23, 24, 25, 26, 27, 28].every((i) =>
+              isOnScreen(kp[i], minVis)
+            );
 
-            // Exige as duas pernas inteiras (ombro até tornozelo, dos dois
-            // lados) visíveis e dentro do enquadramento - filtro "todos os
-            // pontos na tela".
-            const minVis = 0.5;
-            const hasAllPoints =
-              isOnScreen(leftShoulder, minVis) &&
-              isOnScreen(rightShoulder, minVis) &&
-              isOnScreen(leftHip, minVis) &&
-              isOnScreen(rightHip, minVis) &&
-              isOnScreen(leftKnee, minVis) &&
-              isOnScreen(rightKnee, minVis) &&
-              isOnScreen(leftAnkle, minVis) &&
-              isOnScreen(rightAnkle, minVis);
+            if (!hasAllPoints) {
+              canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+              if (isWorkoutActive) {
+                registerBadFrame();
+              } else {
+                resetCountdown();
+                sendStatus('Fique de corpo inteiro visível na câmera');
+              }
+              return;
+            }
 
-            if (isWorkoutActive && !hasAllPoints) {
-              startExitCountdown();
-            } else if (isWorkoutActive && hasAllPoints) {
+            if (isWorkoutActive) {
+              badFrames = 0;
               cancelExitCountdown();
             }
 
-            if (!isWorkoutActive && !hasAllPoints) {
-              canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-              resetCountdown();
-              sendStatus('Fique de corpo inteiro visível na câmera');
-              return;
-            }
+            const m = readSquat(kp);
 
-            // Ângulo de CADA joelho (quadril-joelho-tornozelo), calculado
-            // separadamente pro lado esquerdo e direito. Só conta o
-            // movimento quando os DOIS joelhos dobram (e depois os DOIS
-            // estendem de novo) — evita contar agachamento assimétrico ou
-            // um "chute" de perna só.
-            const leftKneeAngle = calculateAngle(leftHip, leftKnee, leftAnkle);
-            const rightKneeAngle = calculateAngle(rightHip, rightKnee, rightAnkle);
-
-            // Pontos médios (esquerdo+direito) do quadril, ombro e
-            // tornozelo — usados pros vetores de corpo inteiro abaixo em
-            // vez de só um lado, então ruído/oclusão de um lado só não
-            // derruba a leitura.
-            const hipMid = midpoint(leftHip, rightHip);
-            const shoulderMid = midpoint(leftShoulder, rightShoulder);
-            const ankleMid = midpoint(leftAnkle, rightAnkle);
-
-            // Ângulo do tronco (ombro-quadril) em relação à vertical real —
-            // precisa continuar razoavelmente ereto. Sem essa checagem,
-            // dava pra "roubar" o agachamento só se curvando pra frente
-            // (dobrar a cintura) sem realmente flexionar o joelho e abaixar
-            // o quadril.
-            const torsoAngle = angleFromVertical(shoulderMid, hipMid);
-            const isTorsoUpright = torsoAngle <= 55;
-
-            const kneeAngleAvg = (leftKneeAngle + rightKneeAngle) / 2;
-
-            // Limiares do ângulo de joelho.
-            //
-            // KNEE_STRAIGHT: no topo os dois joelhos precisam estar
-            // realmente esticados — é o começo da "amplitude completa" que o
-            // treino exige.
-            // KNEE_BENT_MAX / KNEE_DELTA_DOWN: pra considerar "dobrado"
-            // basta uma dobra moderada, mas ela é medida DUAS vezes: pelo
-            // ângulo absoluto e pela variação em relação ao ângulo que os
-            // joelhos tinham em pé (KNEE_DELTA_DOWN). A variação é o que
-            // salva a leitura quando a pessoa está de frente pra câmera,
-            // onde o ângulo absoluto projetado em 2D fica sempre alto.
-            const KNEE_STRAIGHT = 158;
-            const KNEE_BENT_MAX = 168;
-            const KNEE_DELTA_DOWN = 14;
-            const KNEE_DELTA_UP = 7;
-
-            const kneeDrop =
-              standingKneeAngle !== null ? standingKneeAngle - kneeAngleAvg : 0;
-
-            const bothStanding =
-              leftKneeAngle > KNEE_STRAIGHT &&
-              rightKneeAngle > KNEE_STRAIGHT &&
-              (standingKneeAngle === null || kneeDrop <= KNEE_DELTA_UP);
-
-            const bothBent =
-              leftKneeAngle < KNEE_BENT_MAX &&
-              rightKneeAngle < KNEE_BENT_MAX &&
-              standingKneeAngle !== null &&
-              kneeDrop >= KNEE_DELTA_DOWN;
-
-            // PROFUNDIDADE DO AGACHAMENTO
-            //
-            // Contar agachamento só pelo ângulo do joelho não funciona bem
-            // com a pessoa de FRENTE pra câmera: a dobra do joelho acontece
-            // em profundidade (o eixo que a câmera achata), então o ângulo
-            // projetado em 2D quase não muda mesmo num agachamento completo.
-            //
-            // O que a câmera SEMPRE enxerga bem é o movimento vertical, que
-            // está no plano da imagem. Então medimos o quanto o CORPO INTEIRO
-            // desceu: "depth" (quadril) e "shoulderDepth" (ombro) são a
-            // fração de altura perdida em relação à posição em pé (0 = em
-            // pé, ~0.2 = meio agachamento, 0.35+ = agachamento completo).
-            // Exigir os dois juntos significa que o corpo todo desceu — não
-            // dá pra validar a repetição só dobrando/esticando o joelho com o
-            // corpo parado na mesma altura.
-            const hipHeight = heightInTorsos(hipMid, shoulderMid, hipMid, ankleMid);
-            const shoulderHeight = heightInTorsos(shoulderMid, shoulderMid, hipMid, ankleMid);
-            const depth =
-              hipHeight !== null && standingHipHeight
-                ? 1 - hipHeight / standingHipHeight
-                : 0;
-            const shoulderDepth =
-              shoulderHeight !== null && standingShoulderHeight
-                ? 1 - shoulderHeight / standingShoulderHeight
-                : 0;
-
+            // 2) Pré-treino: a contagem regressiva só começa com a pessoa em
+            // pé, ereta e com as pernas retas — e é aqui que a posição da
+            // cabeça em pé é marcada.
             if (!isWorkoutActive) {
-              // Antes do treino começar ainda não existe referência de "em
-              // pé", então aqui o critério de joelho esticado é só o ângulo
-              // absoluto (o delta só passa a valer depois da calibração).
-              const kneesExtended =
-                leftKneeAngle > KNEE_STRAIGHT && rightKneeAngle > KNEE_STRAIGHT;
-
-              if (!kneesExtended || !isTorsoUpright) {
+              if (!isStanding(m)) {
                 drawSkeleton(kp, '#ff0055');
                 resetCountdown();
                 sendStatus('Fique em pé, ereto, com as duas pernas visíveis, para começar');
                 return;
               }
-
-              // Chegou aqui = está de pé e ereto. Esse é o momento certo de
-              // calibrar as referências de altura e de joelho esticado.
-              if (hipHeight !== null) {
-                standingHipHeight = hipHeight;
-              }
-              if (shoulderHeight !== null) {
-                standingShoulderHeight = shoulderHeight;
-              }
-              standingKneeAngle = kneeAngleAvg;
+              calibrateStanding(m);
             }
 
             const skeletonColor = isExiting ? '#ff0055' : (isWorkoutActive ? '#00ff88' : '#00e5ff');
             drawSkeleton(kp, skeletonColor);
 
+            // 3) Contagem regressiva.
             if (!isCountingDown && !isWorkoutActive) {
               isCountingDown = true;
               countdownValue = 3;
@@ -777,6 +770,9 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
                   isCountingDown = false;
                   isWorkoutActive = true;
                   stage = 'up';
+                  badFrames = 0;
+                  bottomHeadDrop = 0;
+                  repStarted = false;
 
                   sendToRN('READY', {});
                 }
@@ -786,74 +782,46 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
 
             if (isCountingDown) return;
 
-            if (isWorkoutActive && !isExiting) {
+            // 4) Contagem da repetição.
+            if (isWorkoutActive && !isExiting && m.headY !== null) {
+              const mv = movementFrom(m);
               let stateChanged = false;
 
-              const DEPTH_DOWN = 0.15;
-              const DEPTH_UP = 0.07;
-              // O ombro desce um pouco menos que o quadril (o tronco se
-              // inclina pra frente na descida), por isso o limiar dele é
-              // proporcionalmente menor.
-              const SHOULDER_DEPTH_DOWN = DEPTH_DOWN * 0.6;
-
-              // DESCEU = o CORPO INTEIRO baixou (quadril E ombro) E os dois
-              // joelhos dobraram. É um E, não um OU: os dois sinais juntos
-              // são o que impede validar a repetição só dobrando e
-              // esticando o joelho com o corpo parado na mesma altura
-              // (quadril/ombro sem descer), ou só afundando o corpo sem
-              // flexionar as pernas.
-              const bodyWentDown =
-                depth >= DEPTH_DOWN && shoulderDepth >= SHOULDER_DEPTH_DOWN;
-              const isDown = bodyWentDown && bothBent;
-
-              // SUBIU = o corpo voltou pra altura de pé E os dois joelhos
-              // estão esticados de novo (amplitude completa). A faixa morta
-              // entre DEPTH_UP e DEPTH_DOWN (histerese) evita contar várias
-              // repetições com um tremor em cima do limiar.
-              const isUp =
-                depth <= DEPTH_UP &&
-                shoulderDepth <= DEPTH_UP + 0.05 &&
-                bothStanding;
-
-              if (isDown && stage !== 'down') {
-                stage = 'down';
-                stateChanged = true;
-              }
-
-              // Feedback de "quase lá": ajuda a pessoa a entender por que a
-              // repetição não contou quando só um dos dois sinais apareceu.
-              if (stage !== 'down') {
-                if (bothBent && !bodyWentDown) {
-                  sendStatus('Desça o corpo todo, não só dobre os joelhos');
-                } else if (bodyWentDown && !bothBent) {
-                  sendStatus('Dobre mais os joelhos ao descer');
-                }
-              }
-
-              if (isUp && stage === 'down') {
-                if (isTorsoUpright) {
-                  stage = 'up';
-                  count++;
+              if (stage === 'up') {
+                // Desceu: cabeça e quadril abaixo da marca E joelhos dobrados.
+                if (isAtBottom(m, mv)) {
+                  stage = 'down';
+                  bottomHeadDrop = mv.headDrop;
+                  repStarted = false;
                   stateChanged = true;
-                } else {
-                  sendStatus('Mantenha o tronco mais ereto');
+                } else if (mv.headDrop >= HEAD_DROP_DOWN * 0.5) {
+                  repStarted = true;
+                } else if (repStarted && isBackUp(m, mv)) {
+                  // Voltou pra cima sem ter chegado no fundo: não conta.
+                  repStarted = false;
+                  sendStatus('Agachamento incompleto — desça mais');
+                }
+              } else {
+                if (mv.headDrop > bottomHeadDrop) bottomHeadDrop = mv.headDrop;
+
+                // Subiu: pernas retas, cabeça de volta perto da marca e pés
+                // no chão (ver isBackUp) — com o tronco ereto.
+                if (isBackUp(m, mv)) {
+                  if (m.torsoUpright) {
+                    stage = 'up';
+                    count++;
+                    bottomHeadDrop = 0;
+                    stateChanged = true;
+                  } else {
+                    sendStatus('Termine a subida com o tronco ereto');
+                  }
+                } else if (mv.feetLift > FEET_LIFT_MAX) {
+                  sendStatus('Mantenha os pés no chão');
                 }
               }
 
-              // No topo, reajusta devagar as referências de "em pé". Cobre a
-              // pessoa mudando de lugar no meio do treino sem estragar a
-              // contagem — e é lento o bastante (5% por frame) pra não
-              // acompanhar a descida de uma repetição.
-              if (stage === 'up' && depth < 0.05 && shoulderDepth < 0.05) {
-                if (hipHeight !== null && standingHipHeight) {
-                  standingHipHeight = standingHipHeight * 0.95 + hipHeight * 0.05;
-                }
-                if (shoulderHeight !== null && standingShoulderHeight) {
-                  standingShoulderHeight = standingShoulderHeight * 0.95 + shoulderHeight * 0.05;
-                }
-                if (standingKneeAngle !== null && kneeAngleAvg > KNEE_STRAIGHT) {
-                  standingKneeAngle = standingKneeAngle * 0.95 + kneeAngleAvg * 0.05;
-                }
+              if (stage === 'up' && !repStarted && Math.abs(mv.headDrop) < 0.03 && m.kneeAvg > KNEE_STRAIGHT) {
+                refineStanding(m);
               }
 
               if (stateChanged) {
