@@ -186,6 +186,8 @@ type ChallengeContextValue = {
   failedAt: ChallengeExerciseId | null;
   totals: ChallengeTotals;
   rewards: ChallengeRewards;
+  /** Troca a dificuldade do próximo desafio (tocando nos bíceps do card). */
+  selectDifficulty: (difficulty: ChallengeDifficulty) => void;
   startChallenge: () => ChallengeStep;
   /** Fecha a etapa atual. Devolve true se ainda existe uma próxima. */
   completeStep: (result: ChallengeStepResult) => boolean;
@@ -309,6 +311,13 @@ export function ChallengeProvider({
     applySession(null);
   }, [applySession, onGrantRewards]);
 
+  // Só vale fora de uma sessão: no meio do desafio a dificuldade é a que
+  // ele começou, e trocar ali embaralharia metas e prêmio.
+  const selectDifficulty = useCallback((next: ChallengeDifficulty) => {
+    if (sessionRef.current) return;
+    setDifficulty(next);
+  }, []);
+
   const abandonChallenge = useCallback(() => {
     applySession(null);
   }, [applySession]);
@@ -345,6 +354,7 @@ export function ChallengeProvider({
       failedAt: session?.failedAt ?? null,
       totals,
       rewards: tier.rewards,
+      selectDifficulty,
       startChallenge,
       completeStep,
       failStep,
@@ -356,6 +366,7 @@ export function ChallengeProvider({
     tier,
     session,
     totals,
+    selectDifficulty,
     startChallenge,
     completeStep,
     failStep,

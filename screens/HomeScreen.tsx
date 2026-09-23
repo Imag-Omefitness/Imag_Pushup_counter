@@ -45,10 +45,13 @@ import CoinIcon from '../assets/icons/Omecoin.svg';
 
 const STREAK_FLAME = require('../assets/gifs animation/tiny_fire_streak.gif');
 
-// Arte animada do card do Desafio Diário, por dificuldade. Por enquanto só
-// o fácil tem gif (teste); os outros níveis caem no ícone de reserva.
+// Arte animada do card do Desafio Diário, uma por dificuldade — cada gif
+// na cor do próprio nível (verde, azul, laranja, rosa).
 const CHALLENGE_ART: Partial<Record<ChallengeDifficulty, ImageSourcePropType>> = {
   easy: require('../assets/gifs animation/calisgreen.gif'),
+  normal: require('../assets/gifs animation/calisblue.gif'),
+  hard: require('../assets/gifs animation/calisorange.gif'),
+  expert: require('../assets/gifs animation/calispink.gif'),
 };
 
 export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
@@ -369,9 +372,9 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const trail = useRef(new Animated.Value(0)).current;
 
-  const { difficulty, tier } = useChallenge();
-  // Bíceps preenchidos = dificuldade do desafio de hoje. Começa no fácil
-  // (só o primeiro aceso) e sobe um degrau a cada desafio concluído.
+  const { difficulty, tier, selectDifficulty } = useChallenge();
+  // Bíceps preenchidos = dificuldade escolhida. Começa no fácil (só o
+  // primeiro aceso); tocar num bíceps escolhe aquele nível.
   const difficultyLevel = DIFFICULTY_ORDER.indexOf(difficulty) + 1;
 
   useEffect(() => {
@@ -442,15 +445,23 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
         {/* Coluna direita: dificuldade, recompensas e botão de início */}
         <View style={styles.challengeRight}>
           <View style={styles.difficultyRow}>
-            {/* Cada bíceps aceso tem a cor do próprio nível: verde, azul,
-                laranja e rosa. */}
+            {/* Tocar num bíceps escolhe a dificuldade. Todos os acesos ficam
+                na cor do nível escolhido — no expert, os quatro rosa. */}
             {DIFFICULTY_ORDER.map((id, index) => (
-              <MaterialCommunityIcons
+              <Pressable
                 key={id}
-                name="arm-flex"
-                size={26}
-                color={index < difficultyLevel ? CHALLENGE_TIERS[id].color : '#2a2a35'}
-              />
+                onPress={() => selectDifficulty(id)}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel={`Dificuldade ${CHALLENGE_TIERS[id].label}`}
+                accessibilityState={{ selected: id === difficulty }}
+              >
+                <MaterialCommunityIcons
+                  name="arm-flex"
+                  size={26}
+                  color={index < difficultyLevel ? tier.color : '#2a2a35'}
+                />
+              </Pressable>
             ))}
           </View>
 
