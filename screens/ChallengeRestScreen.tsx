@@ -10,7 +10,11 @@ import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { useChallenge, CHALLENGE_REST_SECONDS } from '../context/ChallengeContext';
+import {
+  useChallenge,
+  CHALLENGE_REST_SECONDS,
+  withAlpha,
+} from '../context/ChallengeContext';
 import { SPACING } from '../constants/theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ChallengeRest'>;
@@ -26,6 +30,7 @@ export default function ChallengeRestScreen({ navigation }: Props) {
   const stepNumberRef = useRef(challenge.stepNumber);
   const totalStepsRef = useRef(challenge.totalSteps);
   const nextStep = nextStepRef.current;
+  const accent = challenge.tier.color;
 
   // Anel de progresso simples feito com escala/opacidade — sem SVG, já que
   // é só um pulso por segundo acompanhando o número.
@@ -78,14 +83,20 @@ export default function ChallengeRestScreen({ navigation }: Props) {
 
       <Text style={styles.title}>DESCANSE</Text>
 
-      <Animated.Text style={[styles.countdown, { transform: [{ scale }] }]}>
+      <Animated.Text
+        style={[
+          styles.countdown,
+          { color: accent, textShadowColor: withAlpha(accent, 0.35) },
+          { transform: [{ scale }] },
+        ]}
+      >
         {seconds}
       </Animated.Text>
 
       <View style={styles.nextBox}>
         <Text style={styles.nextLabel}>A SEGUIR</Text>
         <View style={styles.nextRow}>
-          <MaterialCommunityIcons name="arrow-right-bold" size={20} color="#00ff88" />
+          <MaterialCommunityIcons name="arrow-right-bold" size={20} color={accent} />
           <Text style={styles.nextText}>
             {nextStep.label} x {nextStep.reps}
           </Text>
@@ -121,8 +132,6 @@ const styles = StyleSheet.create({
   countdown: {
     fontSize: 150,
     fontWeight: '900',
-    color: '#00ff88',
-    textShadowColor: 'rgba(0, 255, 136, 0.35)',
     textShadowRadius: 24,
     marginVertical: SPACING.md,
   },

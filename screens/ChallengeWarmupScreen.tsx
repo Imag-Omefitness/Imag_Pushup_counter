@@ -98,7 +98,9 @@ export default function ChallengeWarmupScreen({ navigation }: Props) {
         <View style={styles.divider} />
 
         <Text style={styles.challengeLabel}>DESAFIO DIÁRIO</Text>
-        <Text style={styles.difficultyLabel}>{challenge.tier.label}</Text>
+        <Text style={[styles.difficultyLabel, { color: challenge.tier.color }]}>
+          {challenge.tier.label}
+        </Text>
 
         <View style={styles.goalList}>
           {challenge.tier.steps.map((item, index) => (
@@ -175,7 +177,6 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
   },
   difficultyLabel: {
-    color: '#00ff88',
     fontSize: 18,
     fontWeight: '900',
     letterSpacing: 2,

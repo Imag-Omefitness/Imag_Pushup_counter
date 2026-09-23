@@ -39,6 +39,8 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
   // Esta tela é a MESMA dentro e fora do Desafio Diário — ver
   // hooks/useChallengeRunner.ts e a nota equivalente na tela de flexão.
   const challenge = useChallengeRunner('situp');
+  // Cor de destaque: verde no treino livre, a cor do nível no desafio.
+  const accent = challenge.accent;
 
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [count, setCount] = useState(0);
@@ -675,7 +677,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
               }
             }
 
-            const skeletonColor = isExiting ? '#ff0055' : (isWorkoutActive ? '#00ff88' : '#00e5ff');
+            const skeletonColor = isExiting ? '#ff0055' : (isWorkoutActive ? '${accent}' : '#00e5ff');
             drawSkeleton(nose, shoulder, hip, knee, ankle, skeletonColor);
 
             if (!isCountingDown && !isWorkoutActive) {
@@ -828,7 +830,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
         statusBarTranslucent
       >
         <View style={styles.countdownContainer} pointerEvents="none">
-          <Text style={styles.countdownText}>{countdown}</Text>
+          <Text style={[styles.countdownText, { color: accent }]}>{countdown}</Text>
         </View>
       </Modal>
 
@@ -847,17 +849,18 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
                 stepNumber={challenge.stepNumber}
                 totalSteps={challenge.totalSteps}
                 remaining={remainingReps}
+                accent={accent}
               />
             )}
 
-            <Text style={styles.count}>
+            <Text style={[styles.count, { color: accent }]}>
               {displayCount}
               {challenge.isActive && (
                 <Text style={styles.countGoal}> / {challenge.targetReps}</Text>
               )}
             </Text>
             <Text style={styles.label}>ABDOMINAIS VÁLIDOS</Text>
-            <Text style={styles.feedback}>{feedback}</Text>
+            <Text style={[styles.feedback, { borderColor: accent }]}>{feedback}</Text>
           </View>
 
           <View
@@ -868,7 +871,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
                 backgroundColor: isPositionLost
                   ? '#ff0055'
                   : stage === 'up'
-                    ? '#00ff88'
+                    ? accent
                     : stage === 'down'
                       ? '#ff0055'
                       : '#6c757d',
@@ -942,6 +945,7 @@ export default function SitupWorkoutScreen({ navigation }: Props) {
         onCancel={() => setShowExitModal(false)}
         onConfirm={handleConfirmExit}
         isChallenge={challenge.isActive}
+        accent={accent}
       />
     </SafeAreaView>
   );

@@ -42,6 +42,8 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
   // Esta tela é a MESMA dentro e fora do Desafio Diário — ver
   // hooks/useChallengeRunner.ts e a nota equivalente na tela de flexão.
   const challenge = useChallengeRunner('squat');
+  // Cor de destaque: verde no treino livre, a cor do nível no desafio.
+  const accent = challenge.accent;
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [count, setCount] = useState(0);
   const [stage, setStage] = useState<Stage>('unknown');
@@ -283,17 +285,18 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
             stepNumber={challenge.stepNumber}
             totalSteps={challenge.totalSteps}
             remaining={remainingReps}
+                accent={accent}
           />
         )}
 
-        <Text style={styles.count}>
+        <Text style={[styles.count, { color: accent }]}>
           {displayCount}
           {challenge.isActive && (
             <Text style={styles.countGoal}> / {challenge.targetReps}</Text>
           )}
         </Text>
         <Text style={styles.label}>AGACHAMENTOS VÁLIDOS</Text>
-        <Text style={styles.feedback}>{feedback}</Text>
+        <Text style={[styles.feedback, { borderColor: accent }]}>{feedback}</Text>
       </View>
 
       <View
@@ -306,7 +309,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
               : stage === 'down'
                 ? '#ff0055'
                 : stage === 'up'
-                  ? '#00ff88'
+                  ? accent
                   : '#6c757d',
           },
         ]}
@@ -815,7 +818,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
               calibrateStanding(m);
             }
 
-            const skeletonColor = isExiting ? '#ff0055' : (isWorkoutActive ? '#00ff88' : '#00e5ff');
+            const skeletonColor = isExiting ? '#ff0055' : (isWorkoutActive ? '${accent}' : '#00e5ff');
             drawSkeleton(kp, skeletonColor);
 
             // 3) Contagem regressiva.
@@ -991,7 +994,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
       >
         <View style={styles.countdownContainer} pointerEvents="none">
           <View style={styles.centerStack}>
-            <Text style={styles.countdownText}>{countdown}</Text>
+            <Text style={[styles.countdownText, { color: accent }]}>{countdown}</Text>
           </View>
           {/* Mesmo SafeAreaView da tela de fora, pra que o HUD caia
               exatamente na mesma posição dentro da janela do modal. */}
@@ -1067,6 +1070,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         onCancel={() => setShowExitModal(false)}
         onConfirm={handleConfirmExit}
         isChallenge={challenge.isActive}
+        accent={accent}
       />
     </SafeAreaView>
   );

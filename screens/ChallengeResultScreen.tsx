@@ -47,7 +47,10 @@ export default function ChallengeResultScreen({ navigation }: Props) {
   const won = challenge.status === 'completed';
   const { totals, rewards } = challenge;
 
-  const accent = won ? '#00ff88' : '#ff3b30';
+  // Vitória ganha a cor do nível que acabou de ser jogado (verde no fácil,
+  // azul no normal, laranja no difícil, rosa no expert).
+  const accent = won ? challenge.tier.color : '#ff3b30';
+  const levelColor = challenge.tier.color;
 
   const pop = useRef(new Animated.Value(0)).current;
 
@@ -135,10 +138,10 @@ export default function ChallengeResultScreen({ navigation }: Props) {
                   <MaterialCommunityIcons
                     name={done ? 'check-circle' : 'circle-outline'}
                     size={18}
-                    color={done ? '#00ff88' : '#4a4a55'}
+                    color={done ? levelColor : '#4a4a55'}
                   />
                   <Text style={styles.repLabel}>{item.label}</Text>
-                  <Text style={[styles.repValue, done && { color: '#00ff88' }]}>
+                  <Text style={[styles.repValue, done && { color: levelColor }]}>
                     {item.reps} / {item.goal}
                   </Text>
                 </View>

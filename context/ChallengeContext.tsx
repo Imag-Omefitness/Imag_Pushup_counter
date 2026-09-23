@@ -58,6 +58,12 @@ export type ChallengeRewards = {
 export type ChallengeTier = {
   id: ChallengeDifficulty;
   label: string;
+  /**
+   * Cor de destaque da dificuldade. Pinta o bíceps correspondente no card
+   * e TUDO que era verde durante o desafio (contador, esqueleto, descanso,
+   * tela de parabéns...), pra cada nível ter a sua identidade.
+   */
+  color: string;
   steps: ChallengeStep[];
   rewards: ChallengeRewards;
 };
@@ -73,6 +79,7 @@ export const CHALLENGE_TIERS: Record<ChallengeDifficulty, ChallengeTier> = {
   easy: {
     id: 'easy',
     label: 'FÁCIL',
+    color: '#00ff88',
     steps: [
       { id: 'pushup', route: 'Pushup', reps: 10, label: 'FLEXÕES' },
       { id: 'situp', route: 'Situp', reps: 15, label: 'ABDOMINAIS' },
@@ -83,6 +90,7 @@ export const CHALLENGE_TIERS: Record<ChallengeDifficulty, ChallengeTier> = {
   normal: {
     id: 'normal',
     label: 'NORMAL',
+    color: '#2f6bff',
     steps: [
       { id: 'pushup', route: 'Pushup', reps: 15, label: 'FLEXÕES' },
       { id: 'situp', route: 'Situp', reps: 25, label: 'ABDOMINAIS' },
@@ -93,6 +101,7 @@ export const CHALLENGE_TIERS: Record<ChallengeDifficulty, ChallengeTier> = {
   hard: {
     id: 'hard',
     label: 'DIFÍCIL',
+    color: '#ff8c1a',
     steps: [
       { id: 'pushup', route: 'Pushup', reps: 25, label: 'FLEXÕES' },
       { id: 'situp', route: 'Situp', reps: 40, label: 'ABDOMINAIS' },
@@ -103,6 +112,7 @@ export const CHALLENGE_TIERS: Record<ChallengeDifficulty, ChallengeTier> = {
   expert: {
     id: 'expert',
     label: 'EXPERT',
+    color: '#ff4fa3',
     steps: [
       { id: 'pushup', route: 'Pushup', reps: 40, label: 'FLEXÕES' },
       { id: 'situp', route: 'Situp', reps: 60, label: 'ABDOMINAIS' },
@@ -111,6 +121,15 @@ export const CHALLENGE_TIERS: Record<ChallengeDifficulty, ChallengeTier> = {
     rewards: { coins: 180, xp: 130, trophies: 40 },
   },
 };
+
+/** Verde padrão do app — o que as telas de treino usam fora do desafio. */
+export const DEFAULT_ACCENT = '#00ff88';
+
+/** '#rrggbb' + alpha (0–1) → 'rgba(...)', pra halos/bordas translúcidas na cor do nível. */
+export function withAlpha(hex: string, alpha: number) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
 
 /** Segundos de descanso entre um exercício e o próximo. */
 export const CHALLENGE_REST_SECONDS = 10;

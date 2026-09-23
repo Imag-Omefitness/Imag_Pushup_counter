@@ -7,6 +7,7 @@ import React from 'react';
 import { StyleSheet, Text, View, Pressable, Modal } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { RADIUS, SPACING } from '../constants/theme';
+import { DEFAULT_ACCENT, withAlpha } from '../context/ChallengeContext';
 
 export default function ExitWorkoutModal({
   visible,
@@ -16,6 +17,7 @@ export default function ExitWorkoutModal({
   onCancel,
   onConfirm,
   isChallenge = false,
+  accent = DEFAULT_ACCENT,
 }: {
   visible: boolean;
   reps: number;
@@ -29,6 +31,8 @@ export default function ExitWorkoutModal({
    * dizer isso — senão o usuário toca achando que está pausando.
    */
   isChallenge?: boolean;
+  /** Cor do botão de continuar — a do nível, quando é o desafio. */
+  accent?: string;
 }) {
   return (
     <Modal
@@ -71,9 +75,15 @@ export default function ExitWorkoutModal({
             </View>
           </View>
 
-          <Pressable style={styles.continueButton} onPress={onCancel}>
-            <MaterialCommunityIcons name="arm-flex" size={18} color="#00ff88" />
-            <Text style={styles.continueButtonText}>
+          <Pressable
+            style={[
+              styles.continueButton,
+              { borderColor: accent, backgroundColor: withAlpha(accent, 0.08) },
+            ]}
+            onPress={onCancel}
+          >
+            <MaterialCommunityIcons name="arm-flex" size={18} color={accent} />
+            <Text style={[styles.continueButtonText, { color: accent }]}>
               {isChallenge ? 'CONTINUAR O DESAFIO' : 'CONTINUAR TREINANDO'}
             </Text>
           </Pressable>
@@ -171,12 +181,9 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.md,
     borderRadius: RADIUS.sm,
     borderWidth: 1.5,
-    borderColor: '#00ff88',
-    backgroundColor: 'rgba(0, 255, 136, 0.08)',
     marginBottom: SPACING.sm,
   },
   continueButtonText: {
-    color: '#00ff88',
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 1,

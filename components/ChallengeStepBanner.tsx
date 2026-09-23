@@ -15,11 +15,14 @@ export default function ChallengeStepBanner({
   stepNumber,
   totalSteps,
   remaining,
+  accent,
 }: {
   stepNumber: number;
   totalSteps: number;
   /** Repetições que ainda faltam para fechar a etapa. */
   remaining: number;
+  /** Cor do nível do desafio. */
+  accent: string;
 }) {
   return (
     <View style={styles.banner} pointerEvents="none">
@@ -30,7 +33,7 @@ export default function ChallengeStepBanner({
         {stepNumber}/{totalSteps}
       </Text>
       <View style={styles.dot} />
-      <Text style={styles.remaining}>
+      <Text style={[styles.remaining, { color: accent }]}>
         {remaining > 0 ? `FALTAM ${remaining}` : 'ETAPA OK'}
       </Text>
     </View>
@@ -69,7 +72,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   remaining: {
-    color: '#00ff88',
     fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0.5,

@@ -36,12 +36,20 @@ import {
 import {
   useChallenge,
   DIFFICULTY_ORDER,
+  CHALLENGE_TIERS,
   ChallengeExerciseId,
+  ChallengeDifficulty,
 } from '../context/ChallengeContext';
 import { RADIUS, SPACING } from '../constants/theme';
 import CoinIcon from '../assets/icons/Omecoin.svg';
 
 const STREAK_FLAME = require('../assets/gifs animation/tiny_fire_streak.gif');
+
+// Arte animada do card do Desafio Diário, por dificuldade. Por enquanto só
+// o fácil tem gif (teste); os outros níveis caem no ícone de reserva.
+const CHALLENGE_ART: Partial<Record<ChallengeDifficulty, ImageSourcePropType>> = {
+  easy: require('../assets/gifs animation/calisgreen.gif'),
+};
 
 export type ExerciseId = 'pushup' | 'situp' | 'squat' | 'pullup';
 
@@ -402,7 +410,15 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
         {/* Coluna esquerda: arte do desafio + metas de repetição */}
         <View style={styles.challengeLeft}>
           <View style={styles.challengeArt}>
-            <MaterialCommunityIcons name="human-male" size={96} color="#ff3b30" />
+            {CHALLENGE_ART[difficulty] ? (
+              <Image
+                source={CHALLENGE_ART[difficulty]}
+                style={styles.challengeArtImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <MaterialCommunityIcons name="human-male" size={96} color={tier.color} />
+            )}
           </View>
 
           <View style={styles.goalList}>
@@ -426,12 +442,14 @@ function DailyChallengeCard({ onStart }: { onStart: () => void }) {
         {/* Coluna direita: dificuldade, recompensas e botão de início */}
         <View style={styles.challengeRight}>
           <View style={styles.difficultyRow}>
-            {DIFFICULTY_ORDER.map((_, index) => (
+            {/* Cada bíceps aceso tem a cor do próprio nível: verde, azul,
+                laranja e rosa. */}
+            {DIFFICULTY_ORDER.map((id, index) => (
               <MaterialCommunityIcons
-                key={index}
+                key={id}
                 name="arm-flex"
                 size={26}
-                color={index < difficultyLevel ? '#00ff88' : '#2a2a35'}
+                color={index < difficultyLevel ? CHALLENGE_TIERS[id].color : '#2a2a35'}
               />
             ))}
           </View>
@@ -1939,6 +1957,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
+  },
+  challengeArtImage: {
+    width: '100%',
+    height: '100%',
   },
   goalList: {
     gap: SPACING.md,

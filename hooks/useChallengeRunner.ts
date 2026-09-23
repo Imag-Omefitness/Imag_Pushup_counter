@@ -18,7 +18,11 @@ import { useCallback, useRef } from 'react';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { useChallenge, ChallengeExerciseId } from '../context/ChallengeContext';
+import {
+  useChallenge,
+  ChallengeExerciseId,
+  DEFAULT_ACCENT,
+} from '../context/ChallengeContext';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -43,6 +47,7 @@ export function useChallengeRunner(exercise: ChallengeExerciseId) {
   const targetRef = useRef(0);
   const stepNumberRef = useRef(1);
   const totalStepsRef = useRef(1);
+  const accentRef = useRef(DEFAULT_ACCENT);
 
   if (activeRef.current === null) {
     const flaggedByRoute =
@@ -56,6 +61,7 @@ export function useChallengeRunner(exercise: ChallengeExerciseId) {
       targetRef.current = step.reps;
       stepNumberRef.current = challenge.stepNumber;
       totalStepsRef.current = challenge.totalSteps;
+      accentRef.current = challenge.tier.color;
     }
   }
 
@@ -95,6 +101,8 @@ export function useChallengeRunner(exercise: ChallengeExerciseId) {
     /** Posição da etapa no desafio, 1-based — pro HUD. */
     stepNumber: stepNumberRef.current,
     totalSteps: totalStepsRef.current,
+    /** Cor de destaque: a do nível no desafio, o verde padrão fora dele. */
+    accent: accentRef.current,
     /** A etapa já foi fechada (evita reabrir modais durante a saída). */
     isSettled: () => settledRef.current,
     settle,
