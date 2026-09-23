@@ -285,7 +285,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
             stepNumber={challenge.stepNumber}
             totalSteps={challenge.totalSteps}
             remaining={remainingReps}
-                accent={accent}
+            accent={accent}
           />
         )}
 
@@ -472,7 +472,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         // câmera.
 
         // Posição inicial / calibração: os dois joelhos acima disso.
-        const KNEE_STRAIGHT = 158;
+        const KNEE_STRAIGHT = 168;
 
         // FUNDO: cabeça desceu, quadril desceu e os dois joelhos dobraram.
         // - A cabeça descendo é o sinal principal do movimento;
@@ -481,10 +481,10 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         // - o joelho dobrando impede validar só abaixando a cabeça/tronco.
         // O joelho só precisa dobrar um pouco (medido em relação ao ângulo
         // em pé, então funciona também de frente pra câmera).
-        const HEAD_DROP_DOWN = 0.14;   // cabeça 14%+ da altura do corpo abaixo da marca
-        const HIP_DROP_DOWN = 0.10;    // quadril 10%+ abaixo da posição em pé
-        const KNEE_BENT_MAX = 170;
-        const KNEE_DELTA_DOWN = 10;
+        const HEAD_DROP_DOWN = 0.18;   // cabeça 14%+ da altura do corpo abaixo da marca
+        const HIP_DROP_DOWN = 0.13;    // quadril 10%+ abaixo da posição em pé
+        const KNEE_BENT_MAX = 165;
+        const KNEE_DELTA_DOWN = 15;
 
         // SUBIDA: pernas quase totalmente retas E cabeça de volta perto da
         // marca inicial E pés no chão.
@@ -495,7 +495,7 @@ export default function SquatWorkoutScreen({ navigation }: Props) {
         const KNEE_UP = 162;
         const KNEE_DELTA_UP = 8;
         const HEAD_DROP_UP = 0.05;
-        const HEAD_RECOVERY_UP = 0.8;
+        const HEAD_RECOVERY_UP = 0.85;
         const FEET_LIFT_MAX = 0.06;
 
         const MAX_TORSO_ANGLE = 55;
