@@ -1,45 +1,80 @@
 # Pushup Counter
 
-App mobile de contagem de exercícios (flexão, abdominal, agachamento) usando a câmera e detecção de pose em tempo real — feito com um amigo, em desenvolvimento.
+A mobile app that counts push-ups, sit-ups and squats in real time using the phone camera and on-device pose detection, wrapped in a gamified experience (XP, levels, coins and a ranking).
 
-## Stack
+Built with React Native and Expo, in TypeScript. This repository is a public snapshot of the project; active development continues in a private repository.
 
-- **Expo SDK 57** + React Native 0.86 + React 19, em TypeScript (modo `strict`)
-- **React Navigation** (native stack) para navegação entre telas
-- **TensorFlow.js** + **MediaPipe Pose**, rodando dentro de uma WebView (o Expo Go não expõe frame processor nativo, então a detecção de pose roda em HTML/JS embutido, não no lado nativo)
-- **expo-camera** para acesso à câmera e **expo-sensors** (acelerômetro) para detectar o posicionamento do celular (ex.: exigir modo paisagem na flexão)
-- **AsyncStorage** para persistência local simples (perfil, XP, preferências de tutorial)
+## Features
 
-## Pré-requisitos
+- **Real-time rep counting** for three exercises: push-ups, sit-ups and squats, based on body-joint angles from MediaPipe Pose.
+- **Anti-cheat checks** so a rep only counts with a real movement (body-line and horizontal-position checks, minimum shoulder displacement normalized by torso length, knee-angle rules).
+- **Phone orientation detection** with the accelerometer: the workout pauses if the phone is not placed the way the exercise requires (lying down for push-ups and sit-ups, upright for squats).
+- **Gamification**: XP, levels, coins and a ranking screen.
+- **Per-exercise tutorials** that can be dismissed permanently.
 
-- Node.js e npm
-- App **Expo Go** instalado no celular (Android/iOS), ou emulador configurado
+## Tech stack
 
-## Como rodar
+| Area | Tools |
+| --- | --- |
+| App | Expo SDK 57, React Native 0.86, React 19, TypeScript (`strict`) |
+| Navigation | React Navigation (native stack) |
+| Pose detection | MediaPipe Pose running inside a WebView |
+| Device APIs | `expo-camera`, `expo-sensors` (accelerometer) |
+| State and storage | React Context, AsyncStorage |
+| Graphics | `react-native-svg` with `react-native-svg-transformer` |
+
+## How it works
+
+Expo Go does not expose a native frame processor, so pose detection runs in the browser engine instead of the native side. Each workout screen builds an inline HTML page that loads MediaPipe Pose, opens the camera with `getUserMedia`, and does the angle math, rep counting and skeleton drawing in JavaScript.
+
+The React Native screen and the WebView talk through a small message protocol:
+
+- **WebView to app:** `window.ReactNativeWebView.postMessage(...)` with events such as `READY`, `COUNTDOWN`, `UPDATE` (count and stage) and `WORKOUT_FINISHED`.
+- **App to WebView:** injected calls such as `__setOrientationOk(bool)` and `__stopCamera()`.
+
+## Getting started
+
+### Prerequisites
+
+- Node.js and npm
+- The **Expo Go** app on your phone (Android or iOS), or a configured emulator
+
+### Run it
 
 ```bash
 npm install
 npm start
 ```
 
-Aperte `a` (Android), `i` (iOS) ou `w` (web) no terminal, ou escaneie o QR code com o Expo Go.
+Press `a` (Android), `i` (iOS) or `w` (web) in the terminal, or scan the QR code with Expo Go.
 
-## Permissões
+`.npmrc` sets `legacy-peer-deps=true`, which is needed for the TensorFlow and MediaPipe peer dependency ranges to resolve.
 
-O app pede acesso à câmera (`NSCameraUsageDescription` / permissão `CAMERA`) — é o que alimenta a detecção de pose.
+### Type check
 
-## Estrutura do projeto
-
-Em reorganização. Hoje:
-
-```
-screens/       # telas (Home, treinos por exercício, ranking)
-components/    # componentes reutilizáveis (modais)
-context/       # estado global (perfil/XP do usuário)
-constants/     # tema (cores, espaçamento)
-navigation/    # tipos de rota
+```bash
+npx tsc --noEmit
 ```
 
-## Contribuindo
+### Permissions
 
-Em definição — veja as issues/board do projeto.
+The app asks for camera access (`CAMERA` on Android, `NSCameraUsageDescription` on iOS). It is what feeds the pose detection.
+
+## Project structure
+
+```
+screens/       # Home, one workout screen per exercise, ranking
+components/    # Reusable UI (tutorial and exit modals, challenge banner)
+context/       # Global state (profile and XP)
+navigation/    # Route types
+constants/     # Theme tokens (spacing, radius)
+assets/        # Icons, fonts and animations
+```
+
+## Status
+
+Work in progress. The UI text is in Brazilian Portuguese, and the app is currently tested through Expo Go.
+
+## License
+
+See [LICENSE](LICENSE).
