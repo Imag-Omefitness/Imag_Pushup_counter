@@ -64,7 +64,7 @@ The app asks for camera access (`CAMERA` on Android, `NSCameraUsageDescription` 
 
 ```
 screens/       # Home, one workout screen per exercise, ranking
-components/    # Reusable UI (tutorial and exit modals, challenge banner)
+components/    # Reusable UI (tutorial and exit modals)
 context/       # Global state (profile and XP)
 navigation/    # Route types
 constants/     # Theme tokens (spacing, radius)
